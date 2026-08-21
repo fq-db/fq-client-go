@@ -2,6 +2,7 @@ package fq
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,13 @@ import (
 )
 
 var ErrConnClosed = errors.New("connection closed by server")
+
+const (
+	frameHeaderSize     = 4
+	maxFramePayloadSize = 1<<32 - 1
+)
+
+var errFrameTooLarge = errors.New("frame exceeds maximum message size")
 
 type TCPClient struct {
 	connection     net.Conn
@@ -52,14 +60,14 @@ func (c *TCPClient) Send(ctx context.Context, request []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	if _, err := c.connection.Write(request); err != nil {
+	if err := writeFrame(c.connection, request); err != nil {
 		return nil, err
 	}
 
 	response := c.bufferPool.Get()
 	defer c.bufferPool.Put(response)
 
-	count, err := c.connection.Read(response)
+	message, err := readFrameInto(c.connection, c.maxMessageSize, response)
 	if err != nil {
 		if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
 			return nil, ErrConnClosed
@@ -68,8 +76,8 @@ func (c *TCPClient) Send(ctx context.Context, request []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	result := make([]byte, count)
-	copy(result, response[:count])
+	result := make([]byte, len(message))
+	copy(result, message)
 
 	return result, nil
 }
@@ -140,4 +148,64 @@ func msgSize(ctx context.Context, client *TCPClient) (int, error) {
 	default:
 		return 0, ErrUnknownRespStatus
 	}
+}
+
+func readFrameInto(conn net.Conn, maxMessageSize int, buffer []byte) ([]byte, error) {
+	header := make([]byte, frameHeaderSize)
+	messageSize, err := readFrameSize(conn, header, maxMessageSize)
+	if err != nil {
+		return nil, err
+	}
+
+	message := buffer[:messageSize]
+	if _, err := io.ReadFull(conn, message); err != nil {
+		return nil, err
+	}
+
+	return message, nil
+}
+
+func readFrameSize(conn net.Conn, header []byte, maxMessageSize int) (int, error) {
+	if _, err := io.ReadFull(conn, header); err != nil {
+		return 0, err
+	}
+
+	messageSize := binary.BigEndian.Uint32(header)
+	if messageSize > uint32(maxMessageSize) {
+		return 0, fmt.Errorf("%w: %d > %d", errFrameTooLarge, messageSize, maxMessageSize)
+	}
+
+	return int(messageSize), nil
+}
+
+func writeFrame(conn net.Conn, payload []byte) error {
+	if uint64(len(payload)) > maxFramePayloadSize {
+		return fmt.Errorf("%w: %d > %d", errFrameTooLarge, len(payload), maxFramePayloadSize)
+	}
+
+	header := make([]byte, frameHeaderSize)
+	binary.BigEndian.PutUint32(header, uint32(len(payload)))
+
+	if err := writeAll(conn, header); err != nil {
+		return err
+	}
+
+	return writeAll(conn, payload)
+}
+
+func writeAll(conn net.Conn, data []byte) error {
+	for len(data) > 0 {
+		n, err := conn.Write(data)
+		if err != nil {
+			return err
+		}
+
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+
+		data = data[n:]
+	}
+
+	return nil
 }

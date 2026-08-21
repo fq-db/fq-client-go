@@ -2,8 +2,8 @@ package fq
 
 import (
 	"context"
+	"fmt"
 	"net"
-	"reflect"
 	"testing"
 	"time"
 
@@ -16,39 +16,24 @@ func TestTCPClient(t *testing.T) {
 	request := "hello server"
 	response := "hello client"
 
-	listener, err := net.Listen("tcp", ":10001")
-	require.NoError(t, err)
-
-	go func() {
-		connection, err := listener.Accept()
-		if err != nil {
-			return
+	address, done := serveFramedClient(t, func(connection net.Conn) error {
+		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+			return err
 		}
 
-		buffer := make([]byte, 2048)
-		count, err := connection.Read(buffer)
-		require.NoError(t, err)
-		require.True(t, reflect.DeepEqual([]byte(request), buffer[:count]))
+		return requireRequestAndRespond(connection, request, response)
+	})
 
-		_, err = connection.Write([]byte(response))
-		require.NoError(t, err)
-
-		defer func() {
-			err = connection.Close()
-			require.NoError(t, err)
-			err = listener.Close()
-			require.NoError(t, err)
-		}()
-	}()
-
-	time.Sleep(100 * time.Millisecond)
-
-	client, err := NewTCPClient("127.0.0.1:10001", 2048, time.Minute)
+	client, err := NewTCPClient(address, 2048, time.Minute)
 	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, client.Close())
+		require.NoError(t, <-done)
+	}()
 
 	buffer, err := client.Send(context.Background(), []byte(request))
 	require.NoError(t, err)
-	require.True(t, reflect.DeepEqual([]byte(response), buffer))
+	require.Equal(t, []byte(response), buffer)
 }
 
 func TestTCPIdleClientConnection(t *testing.T) {
@@ -59,34 +44,74 @@ func TestTCPIdleClientConnection(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	listener, err := net.Listen("tcp", ":10002")
-	require.NoError(t, err)
-
-	go func() {
-		connection, err := listener.Accept()
-		if err != nil {
-			return
+	address, done := serveFramedClient(t, func(connection net.Conn) error {
+		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+			return err
 		}
 
-		buffer := make([]byte, 2048)
-		count, err := connection.Read(buffer)
-		require.NoError(t, err)
-		require.True(t, reflect.DeepEqual([]byte(request), buffer[:count]))
-
+		received, err := readFrame(connection, 2048)
+		if err != nil {
+			return err
+		}
+		if string(received) != request {
+			return fmt.Errorf("unexpected request: %q", string(received))
+		}
 		<-ctx.Done()
-		defer func() {
-			err = connection.Close()
-			require.NoError(t, err)
-			err = listener.Close()
-			require.NoError(t, err)
-		}()
-	}()
 
-	time.Sleep(100 * time.Millisecond)
+		return nil
+	})
 
-	client, err := NewTCPClient("127.0.0.1:10002", 2048, time.Millisecond*50)
+	client, err := NewTCPClient(address, 2048, time.Millisecond*50)
 	require.NoError(t, err)
 
 	_, err = client.Send(context.Background(), []byte(request))
 	require.Error(t, err)
+	cancel()
+	require.NoError(t, client.Close())
+	require.NoError(t, <-done)
+}
+
+func serveFramedClient(t *testing.T, handler func(net.Conn) error) (string, <-chan error) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		defer func() {
+			_ = listener.Close()
+		}()
+
+		connection, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer func() {
+			_ = connection.Close()
+		}()
+
+		done <- handler(connection)
+	}()
+
+	return listener.Addr().String(), done
+}
+
+func requireRequestAndRespond(connection net.Conn, expectedRequest, response string) error {
+	request, err := readFrame(connection, 2048)
+	if err != nil {
+		return err
+	}
+	if string(request) != expectedRequest {
+		return fmt.Errorf("unexpected request: %q", string(request))
+	}
+
+	return writeFrame(connection, []byte(response))
+}
+
+func readFrame(connection net.Conn, maxMessageSize int) ([]byte, error) {
+	buffer := make([]byte, maxMessageSize)
+
+	return readFrameInto(connection, maxMessageSize, buffer)
 }
