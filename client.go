@@ -22,6 +22,8 @@ const (
 	RLimitAlgorithmTB = "TB"
 )
 
+const maxReconnectAttempts = 3
+
 type CappingKey struct {
 	Key     string
 	Capping uint32
@@ -336,17 +338,35 @@ func valuesToBools(values []uint64) []bool {
 
 func sendWithReconnect(ctx context.Context, conn *TCPClient, data []byte) ([]byte, error) {
 	resp, err := conn.Send(ctx, data)
-	if err != nil {
-		if errors.Is(err, ErrConnClosed) {
-			if err := conn.Reconnect(); err != nil {
-				return nil, fmt.Errorf("reconnect: %w", err)
-			}
-
-			return conn.Send(ctx, data)
-		}
-
+	if err == nil {
+		return resp, nil
+	}
+	if !errors.Is(err, ErrConnClosed) {
 		return nil, err
 	}
 
-	return resp, nil
+	lastErr := err
+	for attempt := 1; attempt <= maxReconnectAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		if err := conn.Reconnect(); err != nil {
+			lastErr = fmt.Errorf("reconnect attempt %d: %w", attempt, err)
+
+			continue
+		}
+
+		resp, err = conn.Send(ctx, data)
+		if err == nil {
+			return resp, nil
+		}
+		if !errors.Is(err, ErrConnClosed) {
+			return nil, err
+		}
+
+		lastErr = err
+	}
+
+	return nil, fmt.Errorf("reconnect attempts exceeded: %w", lastErr)
 }

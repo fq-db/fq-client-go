@@ -98,24 +98,23 @@ func TestSendWithReconnectRetriesAfterUnexpectedEOF(t *testing.T) {
 			return
 		}
 
-		received, err := readFrame(connection, 2048)
-		if err != nil {
-			_ = connection.Close()
+		if err := requireRequestAndCloseWithPartialResponse(connection, request); err != nil {
 			done <- err
-			return
-		}
-		if string(received) != request {
-			_ = connection.Close()
-			done <- fmt.Errorf("unexpected request: %q", string(received))
 			return
 		}
 
-		if _, err := connection.Write([]byte{0, 0}); err != nil {
-			_ = connection.Close()
-			done <- err
-			return
+		for i := 0; i < maxReconnectAttempts-1; i++ {
+			connection, err = listener.Accept()
+			if err != nil {
+				done <- err
+				return
+			}
+
+			if err := requireRequestAndCloseWithPartialResponse(connection, request); err != nil {
+				done <- err
+				return
+			}
 		}
-		_ = connection.Close()
 
 		connection, err = listener.Accept()
 		if err != nil {
@@ -139,6 +138,26 @@ func TestSendWithReconnectRetriesAfterUnexpectedEOF(t *testing.T) {
 	buffer, err := sendWithReconnect(context.Background(), client, []byte(request))
 	require.NoError(t, err)
 	require.Equal(t, []byte(response), buffer)
+}
+
+func requireRequestAndCloseWithPartialResponse(connection net.Conn, expectedRequest string) error {
+	defer func() {
+		_ = connection.Close()
+	}()
+
+	received, err := readFrame(connection, 2048)
+	if err != nil {
+		return err
+	}
+	if string(received) != expectedRequest {
+		return fmt.Errorf("unexpected request: %q", string(received))
+	}
+
+	if _, err := connection.Write([]byte{0, 0}); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func serveFramedClient(t *testing.T, handler func(net.Conn) error) (string, <-chan error) {
