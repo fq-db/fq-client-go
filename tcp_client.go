@@ -57,11 +57,11 @@ func (c *TCPClient) Send(ctx context.Context, request []byte) ([]byte, error) {
 	}
 
 	if err := c.connection.SetDeadline(c.deadline(ctx)); err != nil {
-		return nil, err
+		return nil, normalizeConnectionError(err)
 	}
 
 	if err := writeFrame(c.connection, request); err != nil {
-		return nil, err
+		return nil, normalizeConnectionError(err)
 	}
 
 	response := c.bufferPool.Get()
@@ -69,17 +69,38 @@ func (c *TCPClient) Send(ctx context.Context, request []byte) ([]byte, error) {
 
 	message, err := readFrameInto(c.connection, c.maxMessageSize, response)
 	if err != nil {
-		if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
-			return nil, ErrConnClosed
-		}
-
-		return nil, err
+		return nil, normalizeConnectionError(err)
 	}
 
 	result := make([]byte, len(message))
 	copy(result, message)
 
 	return result, nil
+}
+
+func normalizeConnectionError(err error) error {
+	if isConnectionError(err) {
+		return fmt.Errorf("%w: %w", ErrConnClosed, err)
+	}
+
+	return err
+}
+
+func isConnectionError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	if errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
+		errors.Is(err, io.ErrShortWrite) ||
+		errors.Is(err, net.ErrClosed) {
+		return true
+	}
+
+	var netErr net.Error
+
+	return errors.As(err, &netErr)
 }
 
 func (c *TCPClient) Close() error {

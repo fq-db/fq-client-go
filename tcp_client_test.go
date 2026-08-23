@@ -71,6 +71,76 @@ func TestTCPIdleClientConnection(t *testing.T) {
 	require.NoError(t, <-done)
 }
 
+func TestSendWithReconnectRetriesAfterUnexpectedEOF(t *testing.T) {
+	t.Parallel()
+
+	request := "hello server"
+	response := "hello after reconnect"
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		defer func() {
+			_ = listener.Close()
+		}()
+
+		connection, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+
+		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+			_ = connection.Close()
+			done <- err
+			return
+		}
+
+		received, err := readFrame(connection, 2048)
+		if err != nil {
+			_ = connection.Close()
+			done <- err
+			return
+		}
+		if string(received) != request {
+			_ = connection.Close()
+			done <- fmt.Errorf("unexpected request: %q", string(received))
+			return
+		}
+
+		if _, err := connection.Write([]byte{0, 0}); err != nil {
+			_ = connection.Close()
+			done <- err
+			return
+		}
+		_ = connection.Close()
+
+		connection, err = listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer func() {
+			_ = connection.Close()
+		}()
+
+		done <- requireRequestAndRespond(connection, request, response)
+	}()
+
+	client, err := NewTCPClient(listener.Addr().String(), 2048, time.Minute)
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, client.Close())
+		require.NoError(t, <-done)
+	}()
+
+	buffer, err := sendWithReconnect(context.Background(), client, []byte(request))
+	require.NoError(t, err)
+	require.Equal(t, []byte(response), buffer)
+}
+
 func serveFramedClient(t *testing.T, handler func(net.Conn) error) (string, <-chan error) {
 	t.Helper()
 
