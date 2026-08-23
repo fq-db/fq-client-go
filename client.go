@@ -11,16 +11,32 @@ import (
 )
 
 const (
-	CommandIncr    = "INCR"
-	CommandGet     = "GET"
-	CommandDel     = "DEL"
-	CommandMDel    = "MDEL"
-	CommandMsgSize = "MSGSIZE"
+	CommandIncr       = "INCR"
+	CommandGet        = "GET"
+	CommandDel        = "DEL"
+	CommandMDel       = "MDEL"
+	CommandRLimit     = "RLIMIT"
+	CommandMsgSize    = "MSGSIZE"
+	RLimitAlgorithmFW = "FW"
+	RLimitAlgorithmSW = "SW"
+	RLimitAlgorithmTB = "TB"
 )
 
 type CappingKey struct {
 	Key     string
 	Capping uint32
+}
+
+type LimitKey struct {
+	Key    string
+	Window uint32
+}
+
+type RateLimitResult struct {
+	Allowed    bool
+	Current    uint64
+	Remaining  uint64
+	ResetAfter uint32
 }
 
 type Client struct {
@@ -189,6 +205,66 @@ func (c *Client) MDel(ctx context.Context, keys []CappingKey) ([]bool, error) {
 	}
 }
 
+func (c *Client) RLimitFixedWindow(ctx context.Context, key LimitKey, limit uint32) (RateLimitResult, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writeRLimitWindowCommand(buf, RLimitAlgorithmFW, key, limit)
+
+	return c.rlimit(ctx, buf.Bytes())
+}
+
+func (c *Client) RLimitSlidingWindow(ctx context.Context, key LimitKey, limit uint32) (RateLimitResult, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writeRLimitWindowCommand(buf, RLimitAlgorithmSW, key, limit)
+
+	return c.rlimit(ctx, buf.Bytes())
+}
+
+func (c *Client) RLimitTokenBucket(
+	ctx context.Context,
+	key LimitKey,
+	capacity uint32,
+	refillAmount uint32,
+) (RateLimitResult, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writeRLimitTokenBucketCommand(buf, key, capacity, refillAmount)
+
+	return c.rlimit(ctx, buf.Bytes())
+}
+
+func (c *Client) rlimit(ctx context.Context, command []byte) (RateLimitResult, error) {
+	conn, err := c.pool.GetConnection()
+	if err != nil {
+		return RateLimitResult{}, fmt.Errorf("get connection: %w", err)
+	}
+
+	defer c.pool.ReleaseConnection(conn)
+
+	resp, err := sendWithReconnect(ctx, conn, command)
+	if err != nil {
+		return RateLimitResult{}, fmt.Errorf("send: %w", err)
+	}
+
+	result, err := parseRateLimitResponse(resp)
+	if err != nil {
+		return RateLimitResult{}, fmt.Errorf("parse response: %w", err)
+	}
+
+	switch result.status {
+	case ResponseStatusSuccess:
+		return result.result, nil
+	case ResponseStatusError:
+		return RateLimitResult{}, result.err
+	default:
+		return RateLimitResult{}, ErrUnknownRespStatus
+	}
+}
+
 func writeCommand(buf *bytes.Buffer, command string, key CappingKey) {
 	cappingStr := strconv.FormatUint(uint64(key.Capping), 10)
 
@@ -214,6 +290,39 @@ func writeMultiCommand(buf *bytes.Buffer, command string, keys []CappingKey) {
 			buf.WriteByte(' ')
 		}
 	}
+}
+
+func writeRLimitWindowCommand(buf *bytes.Buffer, algorithm string, key LimitKey, limit uint32) {
+	limitStr := strconv.FormatUint(uint64(limit), 10)
+	windowStr := strconv.FormatUint(uint64(key.Window), 10)
+
+	buf.WriteString(CommandRLimit)
+	buf.WriteByte(' ')
+	buf.WriteString(algorithm)
+	buf.WriteByte(' ')
+	buf.WriteString(key.Key)
+	buf.WriteByte(' ')
+	buf.WriteString(limitStr)
+	buf.WriteByte(' ')
+	buf.WriteString(windowStr)
+}
+
+func writeRLimitTokenBucketCommand(buf *bytes.Buffer, key LimitKey, capacity, refillAmount uint32) {
+	capacityStr := strconv.FormatUint(uint64(capacity), 10)
+	refillAmountStr := strconv.FormatUint(uint64(refillAmount), 10)
+	refillWindowStr := strconv.FormatUint(uint64(key.Window), 10)
+
+	buf.WriteString(CommandRLimit)
+	buf.WriteByte(' ')
+	buf.WriteString(RLimitAlgorithmTB)
+	buf.WriteByte(' ')
+	buf.WriteString(key.Key)
+	buf.WriteByte(' ')
+	buf.WriteString(capacityStr)
+	buf.WriteByte(' ')
+	buf.WriteString(refillAmountStr)
+	buf.WriteByte(' ')
+	buf.WriteString(refillWindowStr)
 }
 
 func valuesToBools(values []uint64) []bool {

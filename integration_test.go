@@ -43,30 +43,124 @@ func TestClientAgainstRealFQServer(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
-	key := CappingKey{Key: "integration-key", Capping: 60}
-	value, err := client.Incr(ctx, key)
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), value)
+	t.Run("counters", func(t *testing.T) {
+		key := CappingKey{Key: "integration-key", Capping: 60}
+		value, err := client.Incr(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), value)
 
-	value, err = client.Incr(ctx, key)
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), value)
+		value, err = client.Incr(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, uint64(2), value)
 
-	value, err = client.Get(ctx, key)
-	require.NoError(t, err)
-	require.Equal(t, uint64(2), value)
+		value, err = client.Get(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, uint64(2), value)
 
-	other := CappingKey{Key: "integration-other", Capping: 60}
-	_, err = client.Incr(ctx, other)
-	require.NoError(t, err)
+		other := CappingKey{Key: "integration-other", Capping: 60}
+		_, err = client.Incr(ctx, other)
+		require.NoError(t, err)
 
-	deleted, err := client.MDel(ctx, []CappingKey{key, other})
-	require.NoError(t, err)
-	require.Equal(t, []bool{true, true}, deleted)
+		deleted, err := client.MDel(ctx, []CappingKey{key, other})
+		require.NoError(t, err)
+		require.Equal(t, []bool{true, true}, deleted)
 
-	value, err = client.Get(ctx, key)
-	require.NoError(t, err)
-	require.Equal(t, uint64(0), value)
+		value, err = client.Get(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0), value)
+	})
+
+	t.Run("rlimit", func(t *testing.T) {
+		t.Run("fixed_window", func(t *testing.T) {
+			limitKey := LimitKey{Key: "integration-limit", Window: 60}
+			fw, err := client.RLimitFixedWindow(ctx, limitKey, 2)
+			require.NoError(t, err)
+			require.Equal(t, RateLimitResult{
+				Allowed:   true,
+				Current:   1,
+				Remaining: 1,
+			}, rateLimitResultWithoutResetAfter(fw))
+
+			fw, err = client.RLimitFixedWindow(ctx, limitKey, 2)
+			require.NoError(t, err)
+			require.Equal(t, RateLimitResult{
+				Allowed:   true,
+				Current:   2,
+				Remaining: 0,
+			}, rateLimitResultWithoutResetAfter(fw))
+
+			fw, err = client.RLimitFixedWindow(ctx, limitKey, 2)
+			require.NoError(t, err)
+			require.Equal(t, RateLimitResult{
+				Allowed:   false,
+				Current:   2,
+				Remaining: 0,
+			}, rateLimitResultWithoutResetAfter(fw))
+			require.LessOrEqual(t, fw.ResetAfter, limitKey.Window)
+		})
+
+		t.Run("sliding_window", func(t *testing.T) {
+			limitKey := LimitKey{Key: "integration-sliding", Window: 60}
+			sw, err := client.RLimitSlidingWindow(ctx, limitKey, 2)
+			require.NoError(t, err)
+			require.Equal(t, RateLimitResult{
+				Allowed:   true,
+				Current:   1,
+				Remaining: 1,
+			}, rateLimitResultWithoutResetAfter(sw))
+
+			sw, err = client.RLimitSlidingWindow(ctx, limitKey, 2)
+			require.NoError(t, err)
+			require.Equal(t, RateLimitResult{
+				Allowed:   true,
+				Current:   2,
+				Remaining: 0,
+			}, rateLimitResultWithoutResetAfter(sw))
+
+			sw, err = client.RLimitSlidingWindow(ctx, limitKey, 2)
+			require.NoError(t, err)
+			require.Equal(t, RateLimitResult{
+				Allowed:   false,
+				Current:   2,
+				Remaining: 0,
+			}, rateLimitResultWithoutResetAfter(sw))
+			require.LessOrEqual(t, sw.ResetAfter, limitKey.Window)
+		})
+
+		t.Run("token_bucket", func(t *testing.T) {
+			limitKey := LimitKey{Key: "integration-bucket", Window: 60}
+			tb, err := client.RLimitTokenBucket(ctx, limitKey, 2, 1)
+			require.NoError(t, err)
+			require.Equal(t, RateLimitResult{
+				Allowed:   true,
+				Current:   1,
+				Remaining: 1,
+			}, rateLimitResultWithoutResetAfter(tb))
+
+			tb, err = client.RLimitTokenBucket(ctx, limitKey, 2, 1)
+			require.NoError(t, err)
+			require.Equal(t, RateLimitResult{
+				Allowed:   true,
+				Current:   2,
+				Remaining: 0,
+			}, rateLimitResultWithoutResetAfter(tb))
+
+			tb, err = client.RLimitTokenBucket(ctx, limitKey, 2, 1)
+			require.NoError(t, err)
+			require.Equal(t, RateLimitResult{
+				Allowed:   false,
+				Current:   2,
+				Remaining: 0,
+			}, rateLimitResultWithoutResetAfter(tb))
+			require.LessOrEqual(t, tb.ResetAfter, limitKey.Window)
+		})
+	})
+}
+
+func rateLimitResultWithoutResetAfter(result RateLimitResult) RateLimitResult {
+	result.ResetAfter = 0
+
+	return result
 }
 
 type fqServerProcess struct {
@@ -148,10 +242,15 @@ network:
   max_connections: 16
   max_message_size: 64KB
   idle_timeout: 5s
+persistence:
+  mode: wal_and_dump
+observability:
+  address: ""
 wal:
   sync_commit: on
   flushing_batch_length: 16
   flushing_batch_timeout: 5ms
+  queue_capacity: 16
   max_segment_size: 1MB
   data_directory: "%s"
 engine:

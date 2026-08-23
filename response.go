@@ -64,6 +64,12 @@ type multiResponseStruct struct {
 	err    error
 }
 
+type rateLimitResponseStruct struct {
+	status ResponseStatus
+	result RateLimitResult
+	err    error
+}
+
 func parseMultiResponse(resp []byte) (multiResponseStruct, error) {
 	idx := bytes.IndexByte(resp, respDelimiter)
 	if idx == -1 {
@@ -121,4 +127,66 @@ func respDataToValues(data []byte) ([]uint64, error) {
 	}
 
 	return values, nil
+}
+
+func parseRateLimitResponse(resp []byte) (rateLimitResponseStruct, error) {
+	idx := bytes.IndexByte(resp, respDelimiter)
+	if idx == -1 {
+		return rateLimitResponseStruct{}, ErrCorruptedResponse
+	}
+
+	status := string(resp[:idx])
+	data := resp[idx+1:]
+	switch status {
+	case statusOK:
+		fields := bytes.Split(data, []byte{multiDataDelimiter})
+		if len(fields) != 4 {
+			return rateLimitResponseStruct{}, ErrCorruptedResponse
+		}
+
+		allowed, err := parseBoolField(fields[0])
+		if err != nil {
+			return rateLimitResponseStruct{}, ErrCorruptedResponse
+		}
+
+		current, err := strconv.ParseUint(string(fields[1]), 10, 64)
+		if err != nil {
+			return rateLimitResponseStruct{}, ErrCorruptedResponse
+		}
+
+		remaining, err := strconv.ParseUint(string(fields[2]), 10, 64)
+		if err != nil {
+			return rateLimitResponseStruct{}, ErrCorruptedResponse
+		}
+
+		resetAfter, err := strconv.ParseUint(string(fields[3]), 10, 32)
+		if err != nil {
+			return rateLimitResponseStruct{}, ErrCorruptedResponse
+		}
+
+		return rateLimitResponseStruct{
+			status: ResponseStatusSuccess,
+			result: RateLimitResult{
+				Allowed:    allowed,
+				Current:    current,
+				Remaining:  remaining,
+				ResetAfter: uint32(resetAfter),
+			},
+		}, nil
+	case statusError:
+		return rateLimitResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
+	default:
+		return rateLimitResponseStruct{}, ErrUnknownRespStatus
+	}
+}
+
+func parseBoolField(data []byte) (bool, error) {
+	switch string(data) {
+	case "0":
+		return false, nil
+	case "1":
+		return true, nil
+	default:
+		return false, ErrCorruptedResponse
+	}
 }
