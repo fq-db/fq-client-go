@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
@@ -155,12 +156,62 @@ func TestClientAgainstRealFQServer(t *testing.T) {
 			require.LessOrEqual(t, tb.ResetAfter, limitKey.Window)
 		})
 	})
+
+	t.Run("pstream", func(t *testing.T) {
+		streamEvents := make(chan LimitEvent, 1)
+		streamErrs := make(chan error, 1)
+		go func() {
+			streamErrs <- client.PStream(ctx, "tenant_a-", func(event LimitEvent) error {
+				streamEvents <- event
+
+				return io.EOF
+			})
+		}()
+
+		_, err := client.RLimitFixedWindow(ctx, LimitKey{Key: "tenant_b-user_42", Window: 60}, 1)
+		require.NoError(t, err)
+		requireNoLimitEvent(t, streamEvents)
+
+		_, err = client.RLimitFixedWindow(ctx, LimitKey{Key: "tenant_a-user_42", Window: 60}, 1)
+		require.NoError(t, err)
+
+		event := requireLimitEvent(t, streamEvents)
+		require.Equal(t, "tenant_a-user_42", event.Key)
+		require.Equal(t, uint32(60), event.Window)
+		require.Equal(t, uint64(1), event.Current)
+		require.LessOrEqual(t, event.ResetAfter, uint32(60))
+
+		require.ErrorIs(t, <-streamErrs, io.EOF)
+	})
 }
 
 func rateLimitResultWithoutResetAfter(result RateLimitResult) RateLimitResult {
 	result.ResetAfter = 0
 
 	return result
+}
+
+func requireNoLimitEvent(t *testing.T, events <-chan LimitEvent) {
+	t.Helper()
+
+	select {
+	case event := <-events:
+		t.Fatalf("unexpected limit event: %+v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func requireLimitEvent(t *testing.T, events <-chan LimitEvent) LimitEvent {
+	t.Helper()
+
+	select {
+	case event := <-events:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for limit event")
+	}
+
+	return LimitEvent{}
 }
 
 type fqServerProcess struct {
@@ -256,6 +307,7 @@ wal:
 engine:
   type: in_memory
   clean_interval: 1h
+  limit_event_queue_capacity: 16
 dump:
   interval: 1h
   directory: "%s"

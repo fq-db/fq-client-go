@@ -140,3 +140,56 @@ func Test_parseRateLimitResponse(t *testing.T) {
 		})
 	}
 }
+
+func Test_parseLimitEventResponse(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		want    limitEventResponseStruct
+		wantErr bool
+	}{
+		{
+			name: "event",
+			data: []byte("ok|tenant-user_42;60;2;58"),
+			want: limitEventResponseStruct{
+				status: ResponseStatusSuccess,
+				event: LimitEvent{
+					Key:        "tenant-user_42",
+					Window:     60,
+					Current:    2,
+					ResetAfter: 58,
+				},
+			},
+		},
+		{
+			name: "error response",
+			data: []byte("err|invalid stream prefix"),
+			want: limitEventResponseStruct{
+				status: ResponseStatusError,
+				err:    errors.New("invalid stream prefix"),
+			},
+		},
+		{
+			name:    "invalid fields count",
+			data:    []byte("ok|key;60;2"),
+			wantErr: true,
+		},
+		{
+			name:    "invalid window",
+			data:    []byte("ok|key;window;2;58"),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseLimitEventResponse(tt.data)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+			}
+		})
+	}
+}

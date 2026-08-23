@@ -16,6 +16,8 @@ const (
 	CommandDel        = "DEL"
 	CommandMDel       = "MDEL"
 	CommandRLimit     = "RLIMIT"
+	CommandStream     = "STREAM"
+	CommandPStream    = "PSTREAM"
 	CommandMsgSize    = "MSGSIZE"
 	RLimitAlgorithmFW = "FW"
 	RLimitAlgorithmSW = "SW"
@@ -38,6 +40,13 @@ type RateLimitResult struct {
 	Allowed    bool
 	Current    uint64
 	Remaining  uint64
+	ResetAfter uint32
+}
+
+type LimitEvent struct {
+	Key        string
+	Window     uint32
+	Current    uint64
 	ResetAfter uint32
 }
 
@@ -264,6 +273,71 @@ func (c *Client) rlimit(ctx context.Context, command []byte) (RateLimitResult, e
 		return RateLimitResult{}, result.err
 	default:
 		return RateLimitResult{}, ErrUnknownRespStatus
+	}
+}
+
+func (c *Client) Stream(ctx context.Context, handle func(LimitEvent) error) error {
+	return c.stream(ctx, []byte(CommandStream), handle)
+}
+
+func (c *Client) PStream(ctx context.Context, prefix string, handle func(LimitEvent) error) error {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	buf.WriteString(CommandPStream)
+	buf.WriteByte(' ')
+	buf.WriteString(prefix)
+
+	return c.stream(ctx, buf.Bytes(), handle)
+}
+
+func (c *Client) stream(ctx context.Context, command []byte, handle func(LimitEvent) error) error {
+	conn, err := c.pool.GetConnection()
+	if err != nil {
+		return fmt.Errorf("get connection: %w", err)
+	}
+
+	defer c.pool.ReleaseConnection(conn)
+
+	for {
+		err = conn.Stream(ctx, command, func(response []byte) error {
+			result, err := parseLimitEventResponse(response)
+			if err != nil {
+				return fmt.Errorf("parse response: %w", err)
+			}
+
+			switch result.status {
+			case ResponseStatusSuccess:
+				return handle(result.event)
+			case ResponseStatusError:
+				return result.err
+			default:
+				return ErrUnknownRespStatus
+			}
+		})
+		if err == nil {
+			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if !errors.Is(err, ErrConnClosed) {
+			return err
+		}
+
+		var reconnectErr error
+		for attempt := 1; attempt <= maxReconnectAttempts; attempt++ {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+
+			if reconnectErr = conn.Reconnect(); reconnectErr == nil {
+				break
+			}
+		}
+		if reconnectErr != nil {
+			return fmt.Errorf("stream reconnect attempts exceeded: %w", reconnectErr)
+		}
 	}
 }
 

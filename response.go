@@ -70,6 +70,12 @@ type rateLimitResponseStruct struct {
 	err    error
 }
 
+type limitEventResponseStruct struct {
+	status ResponseStatus
+	event  LimitEvent
+	err    error
+}
+
 func parseMultiResponse(resp []byte) (multiResponseStruct, error) {
 	idx := bytes.IndexByte(resp, respDelimiter)
 	if idx == -1 {
@@ -188,5 +194,51 @@ func parseBoolField(data []byte) (bool, error) {
 		return true, nil
 	default:
 		return false, ErrCorruptedResponse
+	}
+}
+
+func parseLimitEventResponse(resp []byte) (limitEventResponseStruct, error) {
+	idx := bytes.IndexByte(resp, respDelimiter)
+	if idx == -1 {
+		return limitEventResponseStruct{}, ErrCorruptedResponse
+	}
+
+	status := string(resp[:idx])
+	data := resp[idx+1:]
+	switch status {
+	case statusOK:
+		fields := bytes.Split(data, []byte{multiDataDelimiter})
+		if len(fields) != 4 {
+			return limitEventResponseStruct{}, ErrCorruptedResponse
+		}
+
+		window, err := strconv.ParseUint(string(fields[1]), 10, 32)
+		if err != nil {
+			return limitEventResponseStruct{}, ErrCorruptedResponse
+		}
+
+		current, err := strconv.ParseUint(string(fields[2]), 10, 64)
+		if err != nil {
+			return limitEventResponseStruct{}, ErrCorruptedResponse
+		}
+
+		resetAfter, err := strconv.ParseUint(string(fields[3]), 10, 32)
+		if err != nil {
+			return limitEventResponseStruct{}, ErrCorruptedResponse
+		}
+
+		return limitEventResponseStruct{
+			status: ResponseStatusSuccess,
+			event: LimitEvent{
+				Key:        string(fields[0]),
+				Window:     uint32(window),
+				Current:    current,
+				ResetAfter: uint32(resetAfter),
+			},
+		}, nil
+	case statusError:
+		return limitEventResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
+	default:
+		return limitEventResponseStruct{}, ErrUnknownRespStatus
 	}
 }

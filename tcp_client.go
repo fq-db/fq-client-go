@@ -78,6 +78,41 @@ func (c *TCPClient) Send(ctx context.Context, request []byte) ([]byte, error) {
 	return result, nil
 }
 
+func (c *TCPClient) Stream(ctx context.Context, request []byte, handle func([]byte) error) error {
+	if len(request) > c.maxMessageSize {
+		return fmt.Errorf("request exceeds max message size (%d)", c.maxMessageSize)
+	}
+
+	if err := c.connection.SetDeadline(c.deadline(ctx)); err != nil {
+		return normalizeConnectionError(err)
+	}
+
+	if err := writeFrame(c.connection, request); err != nil {
+		return normalizeConnectionError(err)
+	}
+
+	response := c.bufferPool.Get()
+	defer c.bufferPool.Put(response)
+
+	for {
+		if err := c.connection.SetDeadline(c.deadline(ctx)); err != nil {
+			return normalizeConnectionError(err)
+		}
+
+		message, err := readFrameInto(c.connection, c.maxMessageSize, response)
+		if err != nil {
+			return normalizeConnectionError(err)
+		}
+
+		result := make([]byte, len(message))
+		copy(result, message)
+
+		if err := handle(result); err != nil {
+			return err
+		}
+	}
+}
+
 func normalizeConnectionError(err error) error {
 	if isConnectionError(err) {
 		return fmt.Errorf("%w: %w", ErrConnClosed, err)
