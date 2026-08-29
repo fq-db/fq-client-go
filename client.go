@@ -365,7 +365,7 @@ func (c *Client) QuotaAcquire(
 	}
 }
 
-func (c *Client) QuotaRelease(ctx context.Context, name string, clientID string) (bool, error) {
+func (c *Client) QuotaRelease(ctx context.Context, name, clientID string) (bool, error) {
 	buf := bytesBufferPool.Get()
 	defer bytesBufferPool.Put(buf)
 
@@ -647,7 +647,7 @@ func writeQuotaAcquireCommand(
 	}
 }
 
-func writeQuotaReleaseCommand(buf *bytes.Buffer, name string, clientID string) {
+func writeQuotaReleaseCommand(buf *bytes.Buffer, name, clientID string) {
 	buf.WriteString(CommandQuota)
 	buf.WriteString(" REL ")
 	buf.WriteString(name)
