@@ -76,6 +76,24 @@ type limitEventResponseStruct struct {
 	err    error
 }
 
+type quotaAcquireResponseStruct struct {
+	status ResponseStatus
+	result QuotaAcquireResult
+	err    error
+}
+
+type quotaInfoResponseStruct struct {
+	status ResponseStatus
+	info   QuotaInfo
+	err    error
+}
+
+type quotaEventResponseStruct struct {
+	status ResponseStatus
+	event  QuotaEvent
+	err    error
+}
+
 func parseMultiResponse(resp []byte) (multiResponseStruct, error) {
 	idx := bytes.IndexByte(resp, respDelimiter)
 	if idx == -1 {
@@ -197,6 +215,128 @@ func parseBoolField(data []byte) (bool, error) {
 	}
 }
 
+func parseQuotaAcquireResponse(resp []byte) (quotaAcquireResponseStruct, error) {
+	idx := bytes.IndexByte(resp, respDelimiter)
+	if idx == -1 {
+		return quotaAcquireResponseStruct{}, ErrCorruptedResponse
+	}
+
+	status := string(resp[:idx])
+	data := resp[idx+1:]
+	switch status {
+	case statusOK:
+		fields := bytes.Split(data, []byte{multiDataDelimiter})
+		if len(fields) != 5 {
+			return quotaAcquireResponseStruct{}, ErrCorruptedResponse
+		}
+
+		acquired, err := parseBoolField(fields[0])
+		if err != nil {
+			return quotaAcquireResponseStruct{}, ErrCorruptedResponse
+		}
+
+		allocated, err := strconv.ParseUint(string(fields[1]), 10, 64)
+		if err != nil {
+			return quotaAcquireResponseStruct{}, ErrCorruptedResponse
+		}
+
+		used, err := strconv.ParseUint(string(fields[2]), 10, 64)
+		if err != nil {
+			return quotaAcquireResponseStruct{}, ErrCorruptedResponse
+		}
+
+		remaining, err := strconv.ParseUint(string(fields[3]), 10, 64)
+		if err != nil {
+			return quotaAcquireResponseStruct{}, ErrCorruptedResponse
+		}
+
+		expiresAfter, err := strconv.ParseUint(string(fields[4]), 10, 32)
+		if err != nil {
+			return quotaAcquireResponseStruct{}, ErrCorruptedResponse
+		}
+
+		return quotaAcquireResponseStruct{
+			status: ResponseStatusSuccess,
+			result: QuotaAcquireResult{
+				Acquired:     acquired,
+				Allocated:    allocated,
+				Used:         used,
+				Remaining:    remaining,
+				ExpiresAfter: uint32(expiresAfter),
+			},
+		}, nil
+	case statusError:
+		return quotaAcquireResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
+	default:
+		return quotaAcquireResponseStruct{}, ErrUnknownRespStatus
+	}
+}
+
+func parseQuotaInfoResponse(resp []byte) (quotaInfoResponseStruct, error) {
+	idx := bytes.IndexByte(resp, respDelimiter)
+	if idx == -1 {
+		return quotaInfoResponseStruct{}, ErrCorruptedResponse
+	}
+
+	status := string(resp[:idx])
+	data := resp[idx+1:]
+	switch status {
+	case statusOK:
+		fields := bytes.Split(data, []byte{multiDataDelimiter})
+		if len(fields) < 3 || (len(fields)-3)%3 != 0 {
+			return quotaInfoResponseStruct{}, ErrCorruptedResponse
+		}
+
+		limit, err := strconv.ParseUint(string(fields[0]), 10, 64)
+		if err != nil {
+			return quotaInfoResponseStruct{}, ErrCorruptedResponse
+		}
+
+		used, err := strconv.ParseUint(string(fields[1]), 10, 64)
+		if err != nil {
+			return quotaInfoResponseStruct{}, ErrCorruptedResponse
+		}
+
+		remaining, err := strconv.ParseUint(string(fields[2]), 10, 64)
+		if err != nil {
+			return quotaInfoResponseStruct{}, ErrCorruptedResponse
+		}
+
+		clients := make([]QuotaClientInfo, 0, (len(fields)-3)/3)
+		for i := 3; i < len(fields); i += 3 {
+			amount, err := strconv.ParseUint(string(fields[i+1]), 10, 64)
+			if err != nil {
+				return quotaInfoResponseStruct{}, ErrCorruptedResponse
+			}
+
+			expiresAt, err := strconv.ParseUint(string(fields[i+2]), 10, 32)
+			if err != nil {
+				return quotaInfoResponseStruct{}, ErrCorruptedResponse
+			}
+
+			clients = append(clients, QuotaClientInfo{
+				ClientID:  string(fields[i]),
+				Amount:    amount,
+				ExpiresAt: uint32(expiresAt),
+			})
+		}
+
+		return quotaInfoResponseStruct{
+			status: ResponseStatusSuccess,
+			info: QuotaInfo{
+				Limit:     limit,
+				Used:      used,
+				Remaining: remaining,
+				Clients:   clients,
+			},
+		}, nil
+	case statusError:
+		return quotaInfoResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
+	default:
+		return quotaInfoResponseStruct{}, ErrUnknownRespStatus
+	}
+}
+
 func parseLimitEventResponse(resp []byte) (limitEventResponseStruct, error) {
 	idx := bytes.IndexByte(resp, respDelimiter)
 	if idx == -1 {
@@ -240,5 +380,59 @@ func parseLimitEventResponse(resp []byte) (limitEventResponseStruct, error) {
 		return limitEventResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
 	default:
 		return limitEventResponseStruct{}, ErrUnknownRespStatus
+	}
+}
+
+func parseQuotaEventResponse(resp []byte) (quotaEventResponseStruct, error) {
+	idx := bytes.IndexByte(resp, respDelimiter)
+	if idx == -1 {
+		return quotaEventResponseStruct{}, ErrCorruptedResponse
+	}
+
+	status := string(resp[:idx])
+	data := resp[idx+1:]
+	switch status {
+	case statusOK:
+		fields := bytes.Split(data, []byte{multiDataDelimiter})
+		if len(fields) != 7 {
+			return quotaEventResponseStruct{}, ErrCorruptedResponse
+		}
+
+		amount, err := strconv.ParseUint(string(fields[3]), 10, 64)
+		if err != nil {
+			return quotaEventResponseStruct{}, ErrCorruptedResponse
+		}
+
+		used, err := strconv.ParseUint(string(fields[4]), 10, 64)
+		if err != nil {
+			return quotaEventResponseStruct{}, ErrCorruptedResponse
+		}
+
+		remaining, err := strconv.ParseUint(string(fields[5]), 10, 64)
+		if err != nil {
+			return quotaEventResponseStruct{}, ErrCorruptedResponse
+		}
+
+		expiresAt, err := strconv.ParseUint(string(fields[6]), 10, 32)
+		if err != nil {
+			return quotaEventResponseStruct{}, ErrCorruptedResponse
+		}
+
+		return quotaEventResponseStruct{
+			status: ResponseStatusSuccess,
+			event: QuotaEvent{
+				Event:     string(fields[0]),
+				Name:      string(fields[1]),
+				ClientID:  string(fields[2]),
+				Amount:    amount,
+				Used:      used,
+				Remaining: remaining,
+				ExpiresAt: uint32(expiresAt),
+			},
+		}, nil
+	case statusError:
+		return quotaEventResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
+	default:
+		return quotaEventResponseStruct{}, ErrUnknownRespStatus
 	}
 }

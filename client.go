@@ -18,6 +18,9 @@ const (
 	CommandRLimit     = "RLIMIT"
 	CommandStream     = "STREAM"
 	CommandPStream    = "PSTREAM"
+	CommandQuota      = "QUOTA"
+	CommandQStream    = "QSTREAM"
+	CommandQPStream   = "QPSTREAM"
 	CommandMsgSize    = "MSGSIZE"
 	RLimitAlgorithmFW = "FW"
 	RLimitAlgorithmSW = "SW"
@@ -48,6 +51,37 @@ type LimitEvent struct {
 	Window     uint32
 	Current    uint64
 	ResetAfter uint32
+}
+
+type QuotaAcquireResult struct {
+	Acquired     bool
+	Allocated    uint64
+	Used         uint64
+	Remaining    uint64
+	ExpiresAfter uint32
+}
+
+type QuotaClientInfo struct {
+	ClientID  string
+	Amount    uint64
+	ExpiresAt uint32
+}
+
+type QuotaInfo struct {
+	Limit     uint64
+	Used      uint64
+	Remaining uint64
+	Clients   []QuotaClientInfo
+}
+
+type QuotaEvent struct {
+	Event     string
+	Name      string
+	ClientID  string
+	Amount    uint64
+	Used      uint64
+	Remaining uint64
+	ExpiresAt uint32
 }
 
 type Client struct {
@@ -291,6 +325,140 @@ func (c *Client) PStream(ctx context.Context, prefix string, handle func(LimitEv
 	return c.stream(ctx, buf.Bytes(), handle)
 }
 
+func (c *Client) QuotaAcquire(
+	ctx context.Context,
+	name string,
+	limit uint32,
+	amount uint32,
+	clientID string,
+	ttl ...uint32,
+) (QuotaAcquireResult, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writeQuotaAcquireCommand(buf, name, limit, amount, clientID, ttl...)
+
+	conn, err := c.pool.GetConnection()
+	if err != nil {
+		return QuotaAcquireResult{}, fmt.Errorf("get connection: %w", err)
+	}
+
+	defer c.pool.ReleaseConnection(conn)
+
+	resp, err := sendWithReconnect(ctx, conn, buf.Bytes())
+	if err != nil {
+		return QuotaAcquireResult{}, fmt.Errorf("send: %w", err)
+	}
+
+	result, err := parseQuotaAcquireResponse(resp)
+	if err != nil {
+		return QuotaAcquireResult{}, fmt.Errorf("parse response: %w", err)
+	}
+
+	switch result.status {
+	case ResponseStatusSuccess:
+		return result.result, nil
+	case ResponseStatusError:
+		return QuotaAcquireResult{}, result.err
+	default:
+		return QuotaAcquireResult{}, ErrUnknownRespStatus
+	}
+}
+
+func (c *Client) QuotaRelease(ctx context.Context, name string, clientID string) (bool, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writeQuotaReleaseCommand(buf, name, clientID)
+
+	return c.quotaBool(ctx, buf.Bytes())
+}
+
+func (c *Client) QuotaDelete(ctx context.Context, name string) (bool, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writeQuotaDeleteCommand(buf, name)
+
+	return c.quotaBool(ctx, buf.Bytes())
+}
+
+func (c *Client) QuotaInfo(ctx context.Context, name string) (QuotaInfo, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writeQuotaInfoCommand(buf, name)
+
+	conn, err := c.pool.GetConnection()
+	if err != nil {
+		return QuotaInfo{}, fmt.Errorf("get connection: %w", err)
+	}
+
+	defer c.pool.ReleaseConnection(conn)
+
+	resp, err := sendWithReconnect(ctx, conn, buf.Bytes())
+	if err != nil {
+		return QuotaInfo{}, fmt.Errorf("send: %w", err)
+	}
+
+	result, err := parseQuotaInfoResponse(resp)
+	if err != nil {
+		return QuotaInfo{}, fmt.Errorf("parse response: %w", err)
+	}
+
+	switch result.status {
+	case ResponseStatusSuccess:
+		return result.info, nil
+	case ResponseStatusError:
+		return QuotaInfo{}, result.err
+	default:
+		return QuotaInfo{}, ErrUnknownRespStatus
+	}
+}
+
+func (c *Client) QStream(ctx context.Context, handle func(QuotaEvent) error) error {
+	return c.qstream(ctx, []byte(CommandQStream), handle)
+}
+
+func (c *Client) QPStream(ctx context.Context, prefix string, handle func(QuotaEvent) error) error {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	buf.WriteString(CommandQPStream)
+	buf.WriteByte(' ')
+	buf.WriteString(prefix)
+
+	return c.qstream(ctx, buf.Bytes(), handle)
+}
+
+func (c *Client) quotaBool(ctx context.Context, command []byte) (bool, error) {
+	conn, err := c.pool.GetConnection()
+	if err != nil {
+		return false, fmt.Errorf("get connection: %w", err)
+	}
+
+	defer c.pool.ReleaseConnection(conn)
+
+	resp, err := sendWithReconnect(ctx, conn, command)
+	if err != nil {
+		return false, fmt.Errorf("send: %w", err)
+	}
+
+	result, err := parseResponse(resp)
+	if err != nil {
+		return false, fmt.Errorf("parse response: %w", err)
+	}
+
+	switch result.status {
+	case ResponseStatusSuccess:
+		return result.value == 1, nil
+	case ResponseStatusError:
+		return false, result.err
+	default:
+		return false, ErrUnknownRespStatus
+	}
+}
+
 func (c *Client) stream(ctx context.Context, command []byte, handle func(LimitEvent) error) error {
 	conn, err := c.pool.GetConnection()
 	if err != nil {
@@ -302,6 +470,56 @@ func (c *Client) stream(ctx context.Context, command []byte, handle func(LimitEv
 	for {
 		err = conn.Stream(ctx, command, func(response []byte) error {
 			result, err := parseLimitEventResponse(response)
+			if err != nil {
+				return fmt.Errorf("parse response: %w", err)
+			}
+
+			switch result.status {
+			case ResponseStatusSuccess:
+				return handle(result.event)
+			case ResponseStatusError:
+				return result.err
+			default:
+				return ErrUnknownRespStatus
+			}
+		})
+		if err == nil {
+			return nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
+		if !errors.Is(err, ErrConnClosed) {
+			return err
+		}
+
+		var reconnectErr error
+		for attempt := 1; attempt <= maxReconnectAttempts; attempt++ {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
+
+			if reconnectErr = conn.Reconnect(); reconnectErr == nil {
+				break
+			}
+		}
+		if reconnectErr != nil {
+			return fmt.Errorf("stream reconnect attempts exceeded: %w", reconnectErr)
+		}
+	}
+}
+
+func (c *Client) qstream(ctx context.Context, command []byte, handle func(QuotaEvent) error) error {
+	conn, err := c.pool.GetConnection()
+	if err != nil {
+		return fmt.Errorf("get connection: %w", err)
+	}
+
+	defer c.pool.ReleaseConnection(conn)
+
+	for {
+		err = conn.Stream(ctx, command, func(response []byte) error {
+			result, err := parseQuotaEventResponse(response)
 			if err != nil {
 				return fmt.Errorf("parse response: %w", err)
 			}
@@ -399,6 +617,54 @@ func writeRLimitTokenBucketCommand(buf *bytes.Buffer, key LimitKey, capacity, re
 	buf.WriteString(refillAmountStr)
 	buf.WriteByte(' ')
 	buf.WriteString(refillWindowStr)
+}
+
+func writeQuotaAcquireCommand(
+	buf *bytes.Buffer,
+	name string,
+	limit uint32,
+	amount uint32,
+	clientID string,
+	ttl ...uint32,
+) {
+	limitStr := strconv.FormatUint(uint64(limit), 10)
+	amountStr := strconv.FormatUint(uint64(amount), 10)
+
+	buf.WriteString(CommandQuota)
+	buf.WriteString(" ACQ ")
+	buf.WriteString(name)
+	buf.WriteByte(' ')
+	buf.WriteString(limitStr)
+	buf.WriteByte(' ')
+	buf.WriteString(amountStr)
+	buf.WriteByte(' ')
+	buf.WriteString(clientID)
+
+	if len(ttl) > 0 {
+		ttlStr := strconv.FormatUint(uint64(ttl[0]), 10)
+		buf.WriteByte(' ')
+		buf.WriteString(ttlStr)
+	}
+}
+
+func writeQuotaReleaseCommand(buf *bytes.Buffer, name string, clientID string) {
+	buf.WriteString(CommandQuota)
+	buf.WriteString(" REL ")
+	buf.WriteString(name)
+	buf.WriteByte(' ')
+	buf.WriteString(clientID)
+}
+
+func writeQuotaDeleteCommand(buf *bytes.Buffer, name string) {
+	buf.WriteString(CommandQuota)
+	buf.WriteString(" DEL ")
+	buf.WriteString(name)
+}
+
+func writeQuotaInfoCommand(buf *bytes.Buffer, name string) {
+	buf.WriteString(CommandQuota)
+	buf.WriteString(" INF ")
+	buf.WriteString(name)
 }
 
 func valuesToBools(values []uint64) []bool {

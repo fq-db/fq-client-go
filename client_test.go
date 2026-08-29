@@ -67,6 +67,94 @@ func TestClientRateLimitCommands(t *testing.T) {
 	}, tb)
 }
 
+func TestClientQuotaCommands(t *testing.T) {
+	t.Parallel()
+
+	address, done := serveFramedClient(t, func(connection net.Conn) error {
+		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+			return err
+		}
+
+		if err := requireRequestAndRespond(connection, "QUOTA ACQ campaign_42 10 4 worker_a 60", "ok|1;4;4;6;60"); err != nil {
+			return err
+		}
+
+		if err := requireRequestAndRespond(connection, "QUOTA INF campaign_42", "ok|10;4;6;worker_a;4;1788019260"); err != nil {
+			return err
+		}
+
+		if err := requireRequestAndRespond(connection, "QUOTA REL campaign_42 worker_a", "ok|1"); err != nil {
+			return err
+		}
+
+		return requireRequestAndRespond(connection, "QUOTA DEL campaign_42", "ok|1")
+	})
+
+	client, err := New(address, time.Minute, 1)
+	require.NoError(t, err)
+	defer func() {
+		client.Close()
+		require.NoError(t, <-done)
+	}()
+
+	acquired, err := client.QuotaAcquire(context.Background(), "campaign_42", 10, 4, "worker_a", 60)
+	require.NoError(t, err)
+	require.Equal(t, QuotaAcquireResult{
+		Acquired:     true,
+		Allocated:    4,
+		Used:         4,
+		Remaining:    6,
+		ExpiresAfter: 60,
+	}, acquired)
+
+	info, err := client.QuotaInfo(context.Background(), "campaign_42")
+	require.NoError(t, err)
+	require.Equal(t, QuotaInfo{
+		Limit:     10,
+		Used:      4,
+		Remaining: 6,
+		Clients: []QuotaClientInfo{
+			{ClientID: "worker_a", Amount: 4, ExpiresAt: 1788019260},
+		},
+	}, info)
+
+	released, err := client.QuotaRelease(context.Background(), "campaign_42", "worker_a")
+	require.NoError(t, err)
+	require.True(t, released)
+
+	deleted, err := client.QuotaDelete(context.Background(), "campaign_42")
+	require.NoError(t, err)
+	require.True(t, deleted)
+}
+
+func TestClientQuotaAcquireCommandWithoutTTL(t *testing.T) {
+	t.Parallel()
+
+	address, done := serveFramedClient(t, func(connection net.Conn) error {
+		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+			return err
+		}
+
+		return requireRequestAndRespond(connection, "QUOTA ACQ campaign_42 10 4 worker_a", "ok|1;4;4;6;0")
+	})
+
+	client, err := New(address, time.Minute, 1)
+	require.NoError(t, err)
+	defer func() {
+		client.Close()
+		require.NoError(t, <-done)
+	}()
+
+	acquired, err := client.QuotaAcquire(context.Background(), "campaign_42", 10, 4, "worker_a")
+	require.NoError(t, err)
+	require.Equal(t, QuotaAcquireResult{
+		Acquired:  true,
+		Allocated: 4,
+		Used:      4,
+		Remaining: 6,
+	}, acquired)
+}
+
 func TestClientPStreamCommand(t *testing.T) {
 	t.Parallel()
 
@@ -108,6 +196,49 @@ func TestClientPStreamCommand(t *testing.T) {
 	}, event)
 }
 
+func TestClientQPStreamCommand(t *testing.T) {
+	t.Parallel()
+
+	address, done := serveFramedClient(t, func(connection net.Conn) error {
+		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+			return err
+		}
+
+		request, err := readFrame(connection, 2048)
+		if err != nil {
+			return err
+		}
+		if string(request) != "QPSTREAM tenant_a-" {
+			return fmt.Errorf("unexpected request: %q", string(request))
+		}
+
+		return writeFrame(connection, []byte("ok|acq;tenant_a-quota;client-a;4;4;6;0"))
+	})
+
+	client, err := New(address, time.Minute, 1)
+	require.NoError(t, err)
+	defer func() {
+		client.Close()
+		require.NoError(t, <-done)
+	}()
+
+	var event QuotaEvent
+	err = client.QPStream(context.Background(), "tenant_a-", func(received QuotaEvent) error {
+		event = received
+
+		return io.EOF
+	})
+	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, QuotaEvent{
+		Event:     "acq",
+		Name:      "tenant_a-quota",
+		ClientID:  "client-a",
+		Amount:    4,
+		Used:      4,
+		Remaining: 6,
+	}, event)
+}
+
 func TestClientStreamCommand(t *testing.T) {
 	t.Parallel()
 
@@ -146,6 +277,48 @@ func TestClientStreamCommand(t *testing.T) {
 		Window:     60,
 		Current:    1,
 		ResetAfter: 59,
+	}, event)
+}
+
+func TestClientQStreamCommand(t *testing.T) {
+	t.Parallel()
+
+	address, done := serveFramedClient(t, func(connection net.Conn) error {
+		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+			return err
+		}
+
+		request, err := readFrame(connection, 2048)
+		if err != nil {
+			return err
+		}
+		if string(request) != "QSTREAM" {
+			return fmt.Errorf("unexpected request: %q", string(request))
+		}
+
+		return writeFrame(connection, []byte("ok|rel;quota;client-a;4;0;10;0"))
+	})
+
+	client, err := New(address, time.Minute, 1)
+	require.NoError(t, err)
+	defer func() {
+		client.Close()
+		require.NoError(t, <-done)
+	}()
+
+	var event QuotaEvent
+	err = client.QStream(context.Background(), func(received QuotaEvent) error {
+		event = received
+
+		return io.EOF
+	})
+	require.ErrorIs(t, err, io.EOF)
+	require.Equal(t, QuotaEvent{
+		Event:     "rel",
+		Name:      "quota",
+		ClientID:  "client-a",
+		Amount:    4,
+		Remaining: 10,
 	}, event)
 }
 

@@ -183,10 +183,86 @@ func TestClientAgainstRealFQServer(t *testing.T) {
 
 		require.ErrorIs(t, <-streamErrs, io.EOF)
 	})
+
+	t.Run("quota", func(t *testing.T) {
+		result, err := client.QuotaAcquire(ctx, "integration-quota", 10, 4, "worker-a", 60)
+		require.NoError(t, err)
+		require.Equal(t, QuotaAcquireResult{
+			Acquired:  true,
+			Allocated: 4,
+			Used:      4,
+			Remaining: 6,
+		}, quotaAcquireResultWithoutExpiresAfter(result))
+		require.LessOrEqual(t, result.ExpiresAfter, uint32(60))
+
+		result, err = client.QuotaAcquire(ctx, "integration-quota", 10, 7, "worker-b")
+		require.NoError(t, err)
+		require.Equal(t, QuotaAcquireResult{
+			Acquired:  false,
+			Allocated: 0,
+			Used:      4,
+			Remaining: 6,
+		}, quotaAcquireResultWithoutExpiresAfter(result))
+
+		info, err := client.QuotaInfo(ctx, "integration-quota")
+		require.NoError(t, err)
+		require.Equal(t, uint64(10), info.Limit)
+		require.Equal(t, uint64(4), info.Used)
+		require.Equal(t, uint64(6), info.Remaining)
+		require.Len(t, info.Clients, 1)
+		require.Equal(t, "worker-a", info.Clients[0].ClientID)
+		require.Equal(t, uint64(4), info.Clients[0].Amount)
+		require.NotZero(t, info.Clients[0].ExpiresAt)
+
+		released, err := client.QuotaRelease(ctx, "integration-quota", "worker-a")
+		require.NoError(t, err)
+		require.True(t, released)
+
+		deleted, err := client.QuotaDelete(ctx, "integration-quota")
+		require.NoError(t, err)
+		require.True(t, deleted)
+	})
+
+	t.Run("qpstream", func(t *testing.T) {
+		streamEvents := make(chan QuotaEvent, 1)
+		streamErrs := make(chan error, 1)
+		go func() {
+			streamErrs <- client.QPStream(ctx, "tenant_a-", func(event QuotaEvent) error {
+				streamEvents <- event
+
+				return io.EOF
+			})
+		}()
+
+		_, err := client.QuotaAcquire(ctx, "tenant_b-quota", 10, 4, "worker-a")
+		require.NoError(t, err)
+		requireNoQuotaEvent(t, streamEvents)
+
+		_, err = client.QuotaAcquire(ctx, "tenant_a-quota", 10, 4, "worker-a")
+		require.NoError(t, err)
+
+		event := requireQuotaEvent(t, streamEvents)
+		require.Equal(t, QuotaEvent{
+			Event:     "acq",
+			Name:      "tenant_a-quota",
+			ClientID:  "worker-a",
+			Amount:    4,
+			Used:      4,
+			Remaining: 6,
+		}, event)
+
+		require.ErrorIs(t, <-streamErrs, io.EOF)
+	})
 }
 
 func rateLimitResultWithoutResetAfter(result RateLimitResult) RateLimitResult {
 	result.ResetAfter = 0
+
+	return result
+}
+
+func quotaAcquireResultWithoutExpiresAfter(result QuotaAcquireResult) QuotaAcquireResult {
+	result.ExpiresAfter = 0
 
 	return result
 }
@@ -212,6 +288,29 @@ func requireLimitEvent(t *testing.T, events <-chan LimitEvent) LimitEvent {
 	}
 
 	return LimitEvent{}
+}
+
+func requireNoQuotaEvent(t *testing.T, events <-chan QuotaEvent) {
+	t.Helper()
+
+	select {
+	case event := <-events:
+		t.Fatalf("unexpected quota event: %+v", event)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+func requireQuotaEvent(t *testing.T, events <-chan QuotaEvent) QuotaEvent {
+	t.Helper()
+
+	select {
+	case event := <-events:
+		return event
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for quota event")
+	}
+
+	return QuotaEvent{}
 }
 
 type fqServerProcess struct {
