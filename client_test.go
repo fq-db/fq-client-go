@@ -192,6 +192,56 @@ func TestClientQuotaAcquireLeaseCommand(t *testing.T) {
 	}, acquired)
 }
 
+func TestClientQuotaSetNAndAcquireNCommands(t *testing.T) {
+	t.Parallel()
+
+	address, done := serveFramedClient(t, func(connection net.Conn) error {
+		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+			return err
+		}
+
+		if err := requireRequestAndRespond(connection, "QUOTA SETN campaign_42 10 3", "ok|1"); err != nil {
+			return err
+		}
+
+		if err := requireRequestAndRespond(connection, "QUOTA ACQN campaign_42 worker_a 60", "ok|1;3;3;7;60"); err != nil {
+			return err
+		}
+
+		return requireRequestAndRespond(connection, "QUOTA ACQN campaign_42 worker_b", "ok|1;3;6;4;0")
+	})
+
+	client, err := New(address, time.Minute, 1)
+	require.NoError(t, err)
+	defer func() {
+		client.Close()
+		require.NoError(t, <-done)
+	}()
+
+	changed, err := client.QuotaSetN(context.Background(), "campaign_42", 10, 3)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	first, err := client.QuotaAcquireN(context.Background(), "campaign_42", "worker_a", 60)
+	require.NoError(t, err)
+	require.Equal(t, QuotaAcquireResult{
+		Acquired:     true,
+		Allocated:    3,
+		Used:         3,
+		Remaining:    7,
+		ExpiresAfter: 60,
+	}, first)
+
+	second, err := client.QuotaAcquireN(context.Background(), "campaign_42", "worker_b")
+	require.NoError(t, err)
+	require.Equal(t, QuotaAcquireResult{
+		Acquired:  true,
+		Allocated: 3,
+		Used:      6,
+		Remaining: 4,
+	}, second)
+}
+
 func TestClientPStreamCommand(t *testing.T) {
 	t.Parallel()
 

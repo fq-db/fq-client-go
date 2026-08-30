@@ -225,6 +225,29 @@ func TestClientAgainstRealFQServer(t *testing.T) {
 		deleted, err := client.QuotaDelete(ctx, "integration-quota")
 		require.NoError(t, err)
 		require.True(t, deleted)
+
+		changed, err = client.QuotaSetN(ctx, "integration-quota-n", 10, 3)
+		require.NoError(t, err)
+		require.True(t, changed)
+
+		result, err = client.QuotaAcquireN(ctx, "integration-quota-n", "worker-a", 60)
+		require.NoError(t, err)
+		require.Equal(t, QuotaAcquireResult{
+			Acquired:  true,
+			Allocated: 3,
+			Used:      3,
+			Remaining: 7,
+		}, quotaAcquireResultWithoutExpiresAfter(result))
+		require.LessOrEqual(t, result.ExpiresAfter, uint32(60))
+
+		result, err = client.QuotaAcquireN(ctx, "integration-quota-n", "worker-b")
+		require.NoError(t, err)
+		require.Equal(t, QuotaAcquireResult{
+			Acquired:  true,
+			Allocated: 3,
+			Used:      6,
+			Remaining: 4,
+		}, quotaAcquireResultWithoutExpiresAfter(result))
 	})
 
 	t.Run("qpstream", func(t *testing.T) {
