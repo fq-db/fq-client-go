@@ -185,7 +185,11 @@ func TestClientAgainstRealFQServer(t *testing.T) {
 	})
 
 	t.Run("quota", func(t *testing.T) {
-		result, err := client.QuotaAcquire(ctx, "integration-quota", 10, 4, "worker-a", 60)
+		changed, err := client.QuotaSet(ctx, "integration-quota", 10)
+		require.NoError(t, err)
+		require.True(t, changed)
+
+		result, err := client.QuotaAcquire(ctx, "integration-quota", 4, "worker-a", 60)
 		require.NoError(t, err)
 		require.Equal(t, QuotaAcquireResult{
 			Acquired:  true,
@@ -195,7 +199,7 @@ func TestClientAgainstRealFQServer(t *testing.T) {
 		}, quotaAcquireResultWithoutExpiresAfter(result))
 		require.LessOrEqual(t, result.ExpiresAfter, uint32(60))
 
-		result, err = client.QuotaAcquire(ctx, "integration-quota", 10, 7, "worker-b")
+		result, err = client.QuotaAcquire(ctx, "integration-quota", 7, "worker-b")
 		require.NoError(t, err)
 		require.Equal(t, QuotaAcquireResult{
 			Acquired:  false,
@@ -234,11 +238,11 @@ func TestClientAgainstRealFQServer(t *testing.T) {
 			})
 		}()
 
-		_, err := client.QuotaAcquire(ctx, "tenant_b-quota", 10, 4, "worker-a")
+		_, err := client.QuotaAcquireLease(ctx, "tenant_b-quota", 10, 4, "worker-a")
 		require.NoError(t, err)
 		requireNoQuotaEvent(t, streamEvents)
 
-		_, err = client.QuotaAcquire(ctx, "tenant_a-quota", 10, 4, "worker-a")
+		_, err = client.QuotaAcquireLease(ctx, "tenant_a-quota", 10, 4, "worker-a")
 		require.NoError(t, err)
 
 		event := requireQuotaEvent(t, streamEvents)

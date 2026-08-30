@@ -75,7 +75,11 @@ func TestClientQuotaCommands(t *testing.T) {
 			return err
 		}
 
-		if err := requireRequestAndRespond(connection, "QUOTA ACQ campaign_42 10 4 worker_a 60", "ok|1;4;4;6;60"); err != nil {
+		if err := requireRequestAndRespond(connection, "QUOTA SET campaign_42 10", "ok|1"); err != nil {
+			return err
+		}
+
+		if err := requireRequestAndRespond(connection, "QUOTA ACQ campaign_42 4 worker_a 60", "ok|1;4;4;6;60"); err != nil {
 			return err
 		}
 
@@ -97,7 +101,11 @@ func TestClientQuotaCommands(t *testing.T) {
 		require.NoError(t, <-done)
 	}()
 
-	acquired, err := client.QuotaAcquire(context.Background(), "campaign_42", 10, 4, "worker_a", 60)
+	changed, err := client.QuotaSet(context.Background(), "campaign_42", 10)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	acquired, err := client.QuotaAcquire(context.Background(), "campaign_42", 4, "worker_a", 60)
 	require.NoError(t, err)
 	require.Equal(t, QuotaAcquireResult{
 		Acquired:     true,
@@ -135,7 +143,7 @@ func TestClientQuotaAcquireCommandWithoutTTL(t *testing.T) {
 			return err
 		}
 
-		return requireRequestAndRespond(connection, "QUOTA ACQ campaign_42 10 4 worker_a", "ok|1;4;4;6;0")
+		return requireRequestAndRespond(connection, "QUOTA ACQ campaign_42 4 worker_a", "ok|1;4;4;6;0")
 	})
 
 	client, err := New(address, time.Minute, 1)
@@ -145,13 +153,42 @@ func TestClientQuotaAcquireCommandWithoutTTL(t *testing.T) {
 		require.NoError(t, <-done)
 	}()
 
-	acquired, err := client.QuotaAcquire(context.Background(), "campaign_42", 10, 4, "worker_a")
+	acquired, err := client.QuotaAcquire(context.Background(), "campaign_42", 4, "worker_a")
 	require.NoError(t, err)
 	require.Equal(t, QuotaAcquireResult{
 		Acquired:  true,
 		Allocated: 4,
 		Used:      4,
 		Remaining: 6,
+	}, acquired)
+}
+
+func TestClientQuotaAcquireLeaseCommand(t *testing.T) {
+	t.Parallel()
+
+	address, done := serveFramedClient(t, func(connection net.Conn) error {
+		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+			return err
+		}
+
+		return requireRequestAndRespond(connection, "QUOTA ACQL campaign_42 10 4 worker_a 60", "ok|1;4;4;6;60")
+	})
+
+	client, err := New(address, time.Minute, 1)
+	require.NoError(t, err)
+	defer func() {
+		client.Close()
+		require.NoError(t, <-done)
+	}()
+
+	acquired, err := client.QuotaAcquireLease(context.Background(), "campaign_42", 10, 4, "worker_a", 60)
+	require.NoError(t, err)
+	require.Equal(t, QuotaAcquireResult{
+		Acquired:     true,
+		Allocated:    4,
+		Used:         4,
+		Remaining:    6,
+		ExpiresAfter: 60,
 	}, acquired)
 }
 

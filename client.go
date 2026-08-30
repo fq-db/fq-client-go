@@ -328,6 +328,21 @@ func (c *Client) PStream(ctx context.Context, prefix string, handle func(LimitEv
 func (c *Client) QuotaAcquire(
 	ctx context.Context,
 	name string,
+	amount uint32,
+	clientID string,
+	ttl ...uint32,
+) (QuotaAcquireResult, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writeQuotaAcquireCommand(buf, name, amount, clientID, ttl...)
+
+	return c.quotaAcquire(ctx, buf.Bytes())
+}
+
+func (c *Client) QuotaAcquireLease(
+	ctx context.Context,
+	name string,
 	limit uint32,
 	amount uint32,
 	clientID string,
@@ -336,8 +351,21 @@ func (c *Client) QuotaAcquire(
 	buf := bytesBufferPool.Get()
 	defer bytesBufferPool.Put(buf)
 
-	writeQuotaAcquireCommand(buf, name, limit, amount, clientID, ttl...)
+	writeQuotaAcquireLeaseCommand(buf, name, limit, amount, clientID, ttl...)
 
+	return c.quotaAcquire(ctx, buf.Bytes())
+}
+
+func (c *Client) QuotaSet(ctx context.Context, name string, limit uint32) (bool, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writeQuotaSetCommand(buf, name, limit)
+
+	return c.quotaBool(ctx, buf.Bytes())
+}
+
+func (c *Client) quotaAcquire(ctx context.Context, command []byte) (QuotaAcquireResult, error) {
 	conn, err := c.pool.GetConnection()
 	if err != nil {
 		return QuotaAcquireResult{}, fmt.Errorf("get connection: %w", err)
@@ -345,7 +373,7 @@ func (c *Client) QuotaAcquire(
 
 	defer c.pool.ReleaseConnection(conn)
 
-	resp, err := sendWithReconnect(ctx, conn, buf.Bytes())
+	resp, err := sendWithReconnect(ctx, conn, command)
 	if err != nil {
 		return QuotaAcquireResult{}, fmt.Errorf("send: %w", err)
 	}
@@ -622,6 +650,30 @@ func writeRLimitTokenBucketCommand(buf *bytes.Buffer, key LimitKey, capacity, re
 func writeQuotaAcquireCommand(
 	buf *bytes.Buffer,
 	name string,
+	amount uint32,
+	clientID string,
+	ttl ...uint32,
+) {
+	amountStr := strconv.FormatUint(uint64(amount), 10)
+
+	buf.WriteString(CommandQuota)
+	buf.WriteString(" ACQ ")
+	buf.WriteString(name)
+	buf.WriteByte(' ')
+	buf.WriteString(amountStr)
+	buf.WriteByte(' ')
+	buf.WriteString(clientID)
+
+	if len(ttl) > 0 {
+		ttlStr := strconv.FormatUint(uint64(ttl[0]), 10)
+		buf.WriteByte(' ')
+		buf.WriteString(ttlStr)
+	}
+}
+
+func writeQuotaAcquireLeaseCommand(
+	buf *bytes.Buffer,
+	name string,
 	limit uint32,
 	amount uint32,
 	clientID string,
@@ -631,7 +683,7 @@ func writeQuotaAcquireCommand(
 	amountStr := strconv.FormatUint(uint64(amount), 10)
 
 	buf.WriteString(CommandQuota)
-	buf.WriteString(" ACQ ")
+	buf.WriteString(" ACQL ")
 	buf.WriteString(name)
 	buf.WriteByte(' ')
 	buf.WriteString(limitStr)
@@ -645,6 +697,16 @@ func writeQuotaAcquireCommand(
 		buf.WriteByte(' ')
 		buf.WriteString(ttlStr)
 	}
+}
+
+func writeQuotaSetCommand(buf *bytes.Buffer, name string, limit uint32) {
+	limitStr := strconv.FormatUint(uint64(limit), 10)
+
+	buf.WriteString(CommandQuota)
+	buf.WriteString(" SET ")
+	buf.WriteString(name)
+	buf.WriteByte(' ')
+	buf.WriteString(limitStr)
 }
 
 func writeQuotaReleaseCommand(buf *bytes.Buffer, name, clientID string) {
