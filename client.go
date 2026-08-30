@@ -492,7 +492,7 @@ func (c *Client) Scan(ctx context.Context, cursor string, count uint32) (ScanRes
 	return c.scan(ctx, buf.Bytes())
 }
 
-func (c *Client) PScan(ctx context.Context, prefix string, cursor string, count uint32) (ScanResult, error) {
+func (c *Client) PScan(ctx context.Context, prefix, cursor string, count uint32) (ScanResult, error) {
 	buf := bytesBufferPool.Get()
 	defer bytesBufferPool.Put(buf)
 
@@ -870,7 +870,7 @@ func writeScanCommand(buf *bytes.Buffer, cursor string, count uint32) {
 	buf.WriteString(strconv.FormatUint(uint64(count), 10))
 }
 
-func writePScanCommand(buf *bytes.Buffer, prefix string, cursor string, count uint32) {
+func writePScanCommand(buf *bytes.Buffer, prefix, cursor string, count uint32) {
 	if cursor == "" {
 		cursor = ScanCursorInitial
 	}
