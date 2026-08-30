@@ -26,6 +26,7 @@ const (
 	CommandFlushDB    = "FLUSHDB"
 	CommandTruncate   = "TRUNCATE"
 	CommandMsgSize    = "MSGSIZE"
+	CommandInspect    = "INSPECT"
 	RLimitAlgorithmFW = "FW"
 	RLimitAlgorithmSW = "SW"
 	RLimitAlgorithmTB = "TB"
@@ -33,7 +34,7 @@ const (
 
 const ScanCursorInitial = "0"
 
-const maxReconnectAttempts = 3
+const maxReconnectAttempts = 16
 
 type CappingKey struct {
 	Key     string

@@ -11,14 +11,15 @@ const (
 	multiDataDelimiter = ';'
 )
 
-var (
-	ErrCorruptedResponse = errors.New("corrupted response")
-	ErrUnknownRespStatus = errors.New("unknown response status")
+const (
+	frameStatusOK    = "ok"
+	frameStatusError = "err"
+	frameStatusNext  = "nxt"
 )
 
 var (
-	statusOK    = "ok"
-	statusError = "err"
+	ErrCorruptedResponse = errors.New("corrupted response")
+	ErrUnknownRespStatus = errors.New("unknown response status")
 )
 
 type ResponseStatus uint8
@@ -44,14 +45,14 @@ func parseResponse(resp []byte) (responseStruct, error) {
 	status := string(resp[:idx])
 	data := string(resp[idx+1:])
 	switch status {
-	case statusOK:
+	case frameStatusOK:
 		v, err := strconv.ParseUint(data, 10, 64)
 		if err != nil {
 			return responseStruct{}, ErrCorruptedResponse
 		}
 
 		return responseStruct{status: ResponseStatusSuccess, value: v}, nil
-	case statusError:
+	case frameStatusError:
 		return responseStruct{status: ResponseStatusError, err: errors.New(data)}, nil
 	default:
 		return responseStruct{}, ErrUnknownRespStatus
@@ -103,14 +104,14 @@ func parseMultiResponse(resp []byte) (multiResponseStruct, error) {
 	status := string(resp[:idx])
 	data := resp[idx+1:]
 	switch status {
-	case statusOK:
+	case frameStatusOK:
 		values, err := respDataToValues(data)
 		if err != nil {
 			return multiResponseStruct{}, ErrCorruptedResponse
 		}
 
 		return multiResponseStruct{status: ResponseStatusSuccess, values: values}, nil
-	case statusError:
+	case frameStatusError:
 		return multiResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
 	default:
 		return multiResponseStruct{}, ErrUnknownRespStatus
@@ -162,7 +163,7 @@ func parseRateLimitResponse(resp []byte) (rateLimitResponseStruct, error) {
 	status := string(resp[:idx])
 	data := resp[idx+1:]
 	switch status {
-	case statusOK:
+	case frameStatusOK:
 		fields := bytes.Split(data, []byte{multiDataDelimiter})
 		if len(fields) != 4 {
 			return rateLimitResponseStruct{}, ErrCorruptedResponse
@@ -197,7 +198,7 @@ func parseRateLimitResponse(resp []byte) (rateLimitResponseStruct, error) {
 				ResetAfter: uint32(resetAfter),
 			},
 		}, nil
-	case statusError:
+	case frameStatusError:
 		return rateLimitResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
 	default:
 		return rateLimitResponseStruct{}, ErrUnknownRespStatus
@@ -224,7 +225,7 @@ func parseQuotaAcquireResponse(resp []byte) (quotaAcquireResponseStruct, error) 
 	status := string(resp[:idx])
 	data := resp[idx+1:]
 	switch status {
-	case statusOK:
+	case frameStatusOK:
 		fields := bytes.Split(data, []byte{multiDataDelimiter})
 		if len(fields) != 5 {
 			return quotaAcquireResponseStruct{}, ErrCorruptedResponse
@@ -265,7 +266,7 @@ func parseQuotaAcquireResponse(resp []byte) (quotaAcquireResponseStruct, error) 
 				ExpiresAfter: uint32(expiresAfter),
 			},
 		}, nil
-	case statusError:
+	case frameStatusError:
 		return quotaAcquireResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
 	default:
 		return quotaAcquireResponseStruct{}, ErrUnknownRespStatus
@@ -281,7 +282,7 @@ func parseQuotaInfoResponse(resp []byte) (quotaInfoResponseStruct, error) {
 	status := string(resp[:idx])
 	data := resp[idx+1:]
 	switch status {
-	case statusOK:
+	case frameStatusOK:
 		fields := bytes.Split(data, []byte{multiDataDelimiter})
 		if len(fields) < 3 || (len(fields)-3)%3 != 0 {
 			return quotaInfoResponseStruct{}, ErrCorruptedResponse
@@ -330,7 +331,7 @@ func parseQuotaInfoResponse(resp []byte) (quotaInfoResponseStruct, error) {
 				Clients:   clients,
 			},
 		}, nil
-	case statusError:
+	case frameStatusError:
 		return quotaInfoResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
 	default:
 		return quotaInfoResponseStruct{}, ErrUnknownRespStatus
@@ -352,7 +353,7 @@ func parseScanResponse(resp []byte) (scanResponseStruct, error) {
 	status := string(resp[:idx])
 	data := resp[idx+1:]
 	switch status {
-	case statusOK:
+	case frameStatusOK:
 		fields := bytes.Split(data, []byte{multiDataDelimiter})
 		if len(fields) < 1 || (len(fields)-1)%2 != 0 {
 			return scanResponseStruct{}, ErrCorruptedResponse
@@ -380,7 +381,7 @@ func parseScanResponse(resp []byte) (scanResponseStruct, error) {
 				Keys:   keys,
 			},
 		}, nil
-	case statusError:
+	case frameStatusError:
 		return scanResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
 	default:
 		return scanResponseStruct{}, ErrUnknownRespStatus
@@ -396,7 +397,7 @@ func parseLimitEventResponse(resp []byte) (limitEventResponseStruct, error) {
 	status := string(resp[:idx])
 	data := resp[idx+1:]
 	switch status {
-	case statusOK:
+	case frameStatusOK:
 		fields := bytes.Split(data, []byte{multiDataDelimiter})
 		if len(fields) != 4 {
 			return limitEventResponseStruct{}, ErrCorruptedResponse
@@ -426,7 +427,7 @@ func parseLimitEventResponse(resp []byte) (limitEventResponseStruct, error) {
 				ResetAfter: uint32(resetAfter),
 			},
 		}, nil
-	case statusError:
+	case frameStatusError:
 		return limitEventResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
 	default:
 		return limitEventResponseStruct{}, ErrUnknownRespStatus
@@ -442,7 +443,7 @@ func parseQuotaEventResponse(resp []byte) (quotaEventResponseStruct, error) {
 	status := string(resp[:idx])
 	data := resp[idx+1:]
 	switch status {
-	case statusOK:
+	case frameStatusOK:
 		fields := bytes.Split(data, []byte{multiDataDelimiter})
 		if len(fields) != 7 {
 			return quotaEventResponseStruct{}, ErrCorruptedResponse
@@ -480,7 +481,7 @@ func parseQuotaEventResponse(resp []byte) (quotaEventResponseStruct, error) {
 				ExpiresAt: uint32(expiresAt),
 			},
 		}, nil
-	case statusError:
+	case frameStatusError:
 		return quotaEventResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
 	default:
 		return quotaEventResponseStruct{}, ErrUnknownRespStatus

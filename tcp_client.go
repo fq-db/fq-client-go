@@ -1,6 +1,7 @@
 package fq
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -10,12 +11,12 @@ import (
 	"time"
 )
 
-var ErrConnClosed = errors.New("connection closed by server")
-
 const (
 	frameHeaderSize     = 4
 	maxFramePayloadSize = 1<<32 - 1
 )
+
+var ErrConnClosed = errors.New("connection closed by server")
 
 var errFrameTooLarge = errors.New("frame exceeds maximum message size")
 
@@ -111,6 +112,66 @@ func (c *TCPClient) Stream(ctx context.Context, request []byte, handle func([]by
 			return err
 		}
 	}
+}
+
+func (c *TCPClient) SendChunked(ctx context.Context, request []byte) ([]byte, error) {
+	if len(request) > c.maxMessageSize {
+		return nil, fmt.Errorf("request exceeds max message size (%d)", c.maxMessageSize)
+	}
+
+	if err := c.connection.SetDeadline(c.deadline(ctx)); err != nil {
+		return nil, normalizeConnectionError(err)
+	}
+
+	if err := writeFrame(c.connection, request); err != nil {
+		return nil, normalizeConnectionError(err)
+	}
+
+	response := c.bufferPool.Get()
+	defer c.bufferPool.Put(response)
+
+	var body []byte
+
+	for {
+		if err := c.connection.SetDeadline(c.deadline(ctx)); err != nil {
+			return nil, normalizeConnectionError(err)
+		}
+
+		frame, err := readFrameInto(c.connection, c.maxMessageSize, response)
+		if err != nil {
+			return nil, normalizeConnectionError(err)
+		}
+
+		idx := bytes.IndexByte(frame, respDelimiter)
+		if idx == -1 {
+			return nil, ErrCorruptedResponse
+		}
+
+		status := string(frame[:idx])
+		data := frame[idx+1:]
+
+		switch status {
+		case frameStatusNext:
+			body = append(body, data...)
+		case frameStatusOK:
+			body = append(body, data...)
+
+			return joinStatusAndData(frameStatusOK, body), nil
+		case frameStatusError:
+			return joinStatusAndData(frameStatusError, data), nil
+		default:
+			return nil, fmt.Errorf("unexpected frame status %q", status)
+		}
+	}
+}
+
+func joinStatusAndData(status string, data []byte) []byte {
+	result := make([]byte, 0, len(status)+1+len(data))
+	result = append(result, status...)
+	result = append(result, respDelimiter)
+	result = append(result, data...)
+
+	return result
 }
 
 func normalizeConnectionError(err error) error {

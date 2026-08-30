@@ -9,7 +9,7 @@ type bytesPool struct {
 
 func newBytesPool(size int) *bytesPool {
 	return &bytesPool{
-		pool: sync.Pool{New: func() interface{} {
+		pool: sync.Pool{New: func() any {
 			return make([]byte, size)
 		}},
 		clearSlice: make([]byte, size),
