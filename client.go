@@ -21,6 +21,8 @@ const (
 	CommandQuota      = "QUOTA"
 	CommandQStream    = "QSTREAM"
 	CommandQPStream   = "QPSTREAM"
+	CommandScan       = "SCAN"
+	CommandPScan      = "PSCAN"
 	CommandFlushDB    = "FLUSHDB"
 	CommandTruncate   = "TRUNCATE"
 	CommandMsgSize    = "MSGSIZE"
@@ -28,6 +30,8 @@ const (
 	RLimitAlgorithmSW = "SW"
 	RLimitAlgorithmTB = "TB"
 )
+
+const ScanCursorInitial = "0"
 
 const maxReconnectAttempts = 3
 
@@ -74,6 +78,18 @@ type QuotaInfo struct {
 	Used      uint64
 	Remaining uint64
 	Clients   []QuotaClientInfo
+}
+
+const ScanCursorStart = "0"
+
+type ScanKey struct {
+	Key    string
+	Window uint32
+}
+
+type ScanResult struct {
+	Cursor string
+	Keys   []ScanKey
 }
 
 type QuotaEvent struct {
@@ -469,6 +485,52 @@ func (c *Client) QuotaInfo(ctx context.Context, name string) (QuotaInfo, error) 
 	}
 }
 
+func (c *Client) Scan(ctx context.Context, cursor string, count uint32) (ScanResult, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writeScanCommand(buf, cursor, count)
+
+	return c.scan(ctx, buf.Bytes())
+}
+
+func (c *Client) PScan(ctx context.Context, prefix string, cursor string, count uint32) (ScanResult, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writePScanCommand(buf, prefix, cursor, count)
+
+	return c.scan(ctx, buf.Bytes())
+}
+
+func (c *Client) scan(ctx context.Context, command []byte) (ScanResult, error) {
+	conn, err := c.pool.GetConnection()
+	if err != nil {
+		return ScanResult{}, fmt.Errorf("get connection: %w", err)
+	}
+
+	defer c.pool.ReleaseConnection(conn)
+
+	resp, err := sendWithReconnect(ctx, conn, command)
+	if err != nil {
+		return ScanResult{}, fmt.Errorf("send: %w", err)
+	}
+
+	result, err := parseScanResponse(resp)
+	if err != nil {
+		return ScanResult{}, fmt.Errorf("parse response: %w", err)
+	}
+
+	switch result.status {
+	case ResponseStatusSuccess:
+		return result.result, nil
+	case ResponseStatusError:
+		return ScanResult{}, result.err
+	default:
+		return ScanResult{}, ErrUnknownRespStatus
+	}
+}
+
 func (c *Client) FlushDB(ctx context.Context) (bool, error) {
 	return c.boolCommand(ctx, []byte(CommandFlushDB))
 }
@@ -796,6 +858,32 @@ func writeQuotaInfoCommand(buf *bytes.Buffer, name string) {
 	buf.WriteString(CommandQuota)
 	buf.WriteString(" INF ")
 	buf.WriteString(name)
+}
+
+func writeScanCommand(buf *bytes.Buffer, cursor string, count uint32) {
+	if cursor == "" {
+		cursor = ScanCursorInitial
+	}
+
+	buf.WriteString(CommandScan)
+	buf.WriteByte(' ')
+	buf.WriteString(cursor)
+	buf.WriteByte(' ')
+	buf.WriteString(strconv.FormatUint(uint64(count), 10))
+}
+
+func writePScanCommand(buf *bytes.Buffer, prefix string, cursor string, count uint32) {
+	if cursor == "" {
+		cursor = ScanCursorInitial
+	}
+
+	buf.WriteString(CommandPScan)
+	buf.WriteByte(' ')
+	buf.WriteString(prefix)
+	buf.WriteByte(' ')
+	buf.WriteString(cursor)
+	buf.WriteByte(' ')
+	buf.WriteString(strconv.FormatUint(uint64(count), 10))
 }
 
 func valuesToBools(values []uint64) []bool {

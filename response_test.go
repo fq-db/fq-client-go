@@ -276,6 +276,76 @@ func Test_parseQuotaInfoResponse(t *testing.T) {
 	}
 }
 
+func Test_parseScanResponse(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		want    scanResponseStruct
+		wantErr bool
+	}{
+		{
+			name: "empty result, scan complete",
+			data: []byte("ok|0"),
+			want: scanResponseStruct{
+				status: ResponseStatusSuccess,
+				result: ScanResult{
+					Cursor: "0",
+					Keys:   []ScanKey{},
+				},
+			},
+		},
+		{
+			name: "with keys",
+			data: []byte("ok|MQAAuser_260;user_1;60;user_2;30"),
+			want: scanResponseStruct{
+				status: ResponseStatusSuccess,
+				result: ScanResult{
+					Cursor: "MQAAuser_260",
+					Keys: []ScanKey{
+						{Key: "user_1", Window: 60},
+						{Key: "user_2", Window: 30},
+					},
+				},
+			},
+		},
+		{
+			name: "error response",
+			data: []byte("err|scan index is disabled"),
+			want: scanResponseStruct{
+				status: ResponseStatusError,
+				err:    errors.New("scan index is disabled"),
+			},
+		},
+		{
+			name:    "incomplete key/window pair",
+			data:    []byte("ok|0;user_1"),
+			wantErr: true,
+		},
+		{
+			name:    "invalid window",
+			data:    []byte("ok|0;user_1;window"),
+			wantErr: true,
+		},
+		{
+			name:    "no delimiter",
+			data:    []byte("ok"),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseScanResponse(tt.data)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.want, got)
+			}
+		})
+	}
+}
+
 func Test_parseLimitEventResponse(t *testing.T) {
 	tests := []struct {
 		name    string

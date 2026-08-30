@@ -242,6 +242,48 @@ func TestClientQuotaSetNAndAcquireNCommands(t *testing.T) {
 	}, second)
 }
 
+func TestClientScanCommands(t *testing.T) {
+	t.Parallel()
+
+	address, done := serveFramedClient(t, func(connection net.Conn) error {
+		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+			return err
+		}
+
+		if err := requireRequestAndRespond(connection, "SCAN 0 2", "ok|MQ;user_1;60;user_2;60"); err != nil {
+			return err
+		}
+
+		return requireRequestAndRespond(connection, "PSCAN tenant_a- MQ 2", "ok|0;tenant_a-user_1;60")
+	})
+
+	client, err := New(address, time.Minute, 1)
+	require.NoError(t, err)
+	defer func() {
+		client.Close()
+		require.NoError(t, <-done)
+	}()
+
+	scanned, err := client.Scan(context.Background(), ScanCursorStart, 2)
+	require.NoError(t, err)
+	require.Equal(t, ScanResult{
+		Cursor: "MQ",
+		Keys: []ScanKey{
+			{Key: "user_1", Window: 60},
+			{Key: "user_2", Window: 60},
+		},
+	}, scanned)
+
+	pscanned, err := client.PScan(context.Background(), "tenant_a-", scanned.Cursor, 2)
+	require.NoError(t, err)
+	require.Equal(t, ScanResult{
+		Cursor: "0",
+		Keys: []ScanKey{
+			{Key: "tenant_a-user_1", Window: 60},
+		},
+	}, pscanned)
+}
+
 func TestClientDatabaseMaintenanceCommands(t *testing.T) {
 	t.Parallel()
 

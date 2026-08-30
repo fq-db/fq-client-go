@@ -337,6 +337,56 @@ func parseQuotaInfoResponse(resp []byte) (quotaInfoResponseStruct, error) {
 	}
 }
 
+type scanResponseStruct struct {
+	status ResponseStatus
+	result ScanResult
+	err    error
+}
+
+func parseScanResponse(resp []byte) (scanResponseStruct, error) {
+	idx := bytes.IndexByte(resp, respDelimiter)
+	if idx == -1 {
+		return scanResponseStruct{}, ErrCorruptedResponse
+	}
+
+	status := string(resp[:idx])
+	data := resp[idx+1:]
+	switch status {
+	case statusOK:
+		fields := bytes.Split(data, []byte{multiDataDelimiter})
+		if len(fields) < 1 || (len(fields)-1)%2 != 0 {
+			return scanResponseStruct{}, ErrCorruptedResponse
+		}
+
+		cursor := string(fields[0])
+
+		keys := make([]ScanKey, 0, (len(fields)-1)/2)
+		for i := 1; i < len(fields); i += 2 {
+			window, err := strconv.ParseUint(string(fields[i+1]), 10, 32)
+			if err != nil {
+				return scanResponseStruct{}, ErrCorruptedResponse
+			}
+
+			keys = append(keys, ScanKey{
+				Key:    string(fields[i]),
+				Window: uint32(window),
+			})
+		}
+
+		return scanResponseStruct{
+			status: ResponseStatusSuccess,
+			result: ScanResult{
+				Cursor: cursor,
+				Keys:   keys,
+			},
+		}, nil
+	case statusError:
+		return scanResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
+	default:
+		return scanResponseStruct{}, ErrUnknownRespStatus
+	}
+}
+
 func parseLimitEventResponse(resp []byte) (limitEventResponseStruct, error) {
 	idx := bytes.IndexByte(resp, respDelimiter)
 	if idx == -1 {
