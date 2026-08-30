@@ -21,6 +21,8 @@ const (
 	CommandQuota      = "QUOTA"
 	CommandQStream    = "QSTREAM"
 	CommandQPStream   = "QPSTREAM"
+	CommandFlushDB    = "FLUSHDB"
+	CommandTruncate   = "TRUNCATE"
 	CommandMsgSize    = "MSGSIZE"
 	RLimitAlgorithmFW = "FW"
 	RLimitAlgorithmSW = "SW"
@@ -467,6 +469,14 @@ func (c *Client) QuotaInfo(ctx context.Context, name string) (QuotaInfo, error) 
 	}
 }
 
+func (c *Client) FlushDB(ctx context.Context) (bool, error) {
+	return c.boolCommand(ctx, []byte(CommandFlushDB))
+}
+
+func (c *Client) Truncate(ctx context.Context) (bool, error) {
+	return c.boolCommand(ctx, []byte(CommandTruncate))
+}
+
 func (c *Client) QStream(ctx context.Context, handle func(QuotaEvent) error) error {
 	return c.qstream(ctx, []byte(CommandQStream), handle)
 }
@@ -483,6 +493,10 @@ func (c *Client) QPStream(ctx context.Context, prefix string, handle func(QuotaE
 }
 
 func (c *Client) quotaBool(ctx context.Context, command []byte) (bool, error) {
+	return c.boolCommand(ctx, command)
+}
+
+func (c *Client) boolCommand(ctx context.Context, command []byte) (bool, error) {
 	conn, err := c.pool.GetConnection()
 	if err != nil {
 		return false, fmt.Errorf("get connection: %w", err)

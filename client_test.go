@@ -242,6 +242,37 @@ func TestClientQuotaSetNAndAcquireNCommands(t *testing.T) {
 	}, second)
 }
 
+func TestClientDatabaseMaintenanceCommands(t *testing.T) {
+	t.Parallel()
+
+	address, done := serveFramedClient(t, func(connection net.Conn) error {
+		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+			return err
+		}
+
+		if err := requireRequestAndRespond(connection, "FLUSHDB", "ok|1"); err != nil {
+			return err
+		}
+
+		return requireRequestAndRespond(connection, "TRUNCATE", "ok|1")
+	})
+
+	client, err := New(address, time.Minute, 1)
+	require.NoError(t, err)
+	defer func() {
+		client.Close()
+		require.NoError(t, <-done)
+	}()
+
+	flushed, err := client.FlushDB(context.Background())
+	require.NoError(t, err)
+	require.True(t, flushed)
+
+	truncated, err := client.Truncate(context.Background())
+	require.NoError(t, err)
+	require.True(t, truncated)
+}
+
 func TestClientPStreamCommand(t *testing.T) {
 	t.Parallel()
 

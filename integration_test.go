@@ -280,6 +280,33 @@ func TestClientAgainstRealFQServer(t *testing.T) {
 
 		require.ErrorIs(t, <-streamErrs, io.EOF)
 	})
+
+	t.Run("maintenance", func(t *testing.T) {
+		key := CappingKey{Key: "maintenance-key", Capping: 60}
+		value, err := client.Incr(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), value)
+
+		flushed, err := client.FlushDB(ctx)
+		require.NoError(t, err)
+		require.True(t, flushed)
+
+		value, err = client.Get(ctx, key)
+		require.NoError(t, err)
+		require.Zero(t, value)
+
+		value, err = client.Incr(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), value)
+
+		truncated, err := client.Truncate(ctx)
+		require.NoError(t, err)
+		require.True(t, truncated)
+
+		value, err = client.Get(ctx, key)
+		require.NoError(t, err)
+		require.Zero(t, value)
+	})
 }
 
 func rateLimitResultWithoutResetAfter(result RateLimitResult) RateLimitResult {
