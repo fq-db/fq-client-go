@@ -264,7 +264,7 @@ func TestClientScanCommands(t *testing.T) {
 		require.NoError(t, <-done)
 	}()
 
-	scanned, err := client.Scan(context.Background(), ScanCursorStart, 2)
+	scanned, err := client.Scan(context.Background(), ScanCursorInitial, 2)
 	require.NoError(t, err)
 	require.Equal(t, ScanResult{
 		Cursor: "MQ",

@@ -80,8 +80,6 @@ type QuotaInfo struct {
 	Clients   []QuotaClientInfo
 }
 
-const ScanCursorStart = "0"
-
 type ScanKey struct {
 	Key    string
 	Window uint32

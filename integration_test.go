@@ -71,6 +71,47 @@ func TestClientAgainstRealFQServer(t *testing.T) {
 		require.Equal(t, uint64(0), value)
 	})
 
+	t.Run("scan", func(t *testing.T) {
+		prefix := "scan-test-"
+		keys := []string{prefix + "a", prefix + "b", prefix + "c"}
+		for _, key := range keys {
+			_, err := client.Incr(ctx, CappingKey{Key: key, Capping: 60})
+			require.NoError(t, err)
+		}
+
+		collected := map[string]uint32{}
+		cursor := ScanCursorInitial
+		for i := 0; i < 10; i++ {
+			result, err := client.PScan(ctx, prefix, cursor, 1)
+			require.NoError(t, err)
+
+			for _, key := range result.Keys {
+				collected[key.Key] = key.Window
+			}
+
+			cursor = result.Cursor
+			if cursor == ScanCursorInitial {
+				break
+			}
+		}
+
+		require.Len(t, collected, len(keys))
+		for _, key := range keys {
+			require.Equal(t, uint32(60), collected[key])
+		}
+
+		full, err := client.Scan(ctx, ScanCursorInitial, 100)
+		require.NoError(t, err)
+
+		fullKeys := make(map[string]struct{}, len(full.Keys))
+		for _, key := range full.Keys {
+			fullKeys[key.Key] = struct{}{}
+		}
+		for _, key := range keys {
+			require.Contains(t, fullKeys, key)
+		}
+	})
+
 	t.Run("rlimit", func(t *testing.T) {
 		t.Run("fixed_window", func(t *testing.T) {
 			limitKey := LimitKey{Key: "integration-limit", Window: 60}
@@ -461,6 +502,7 @@ engine:
   type: in_memory
   clean_interval: 1h
   limit_event_queue_capacity: 16
+  key_index: true
 dump:
   interval: 1h
   directory: "%s"
