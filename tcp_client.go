@@ -3,6 +3,7 @@ package fq
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 const (
 	frameHeaderSize     = 4
 	maxFramePayloadSize = 1<<32 - 1
+	connectTimeout      = 5 * time.Second
 )
 
 var ErrConnClosed = errors.New("connection closed by server")
@@ -26,30 +28,117 @@ type TCPClient struct {
 	maxMessageSize int
 	idleTimeout    time.Duration
 	bufferPool     *bytesPool
+	token          string
+	tlsConfig      *tls.Config
 }
 
-func NewTCPClient(address string, maxMessageSize int, idleTimeout time.Duration) (*TCPClient, error) {
-	connection, err := net.Dial("tcp", address)
+func NewTCPClient(
+	address string,
+	maxMessageSize int,
+	idleTimeout time.Duration,
+	opts ...Option,
+) (*TCPClient, error) {
+	settings, err := applyOptions(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to dial: %w", err)
+		return nil, err
 	}
 
 	c := &TCPClient{
-		connection:     connection,
 		address:        address,
 		maxMessageSize: maxMessageSize,
 		idleTimeout:    idleTimeout,
 		bufferPool:     newBytesPool(maxMessageSize),
+		token:          settings.token,
+		tlsConfig:      settings.tlsConfig,
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
-	defer cancel()
-
-	if err := c.getAndSetMsgSize(ctx); err != nil {
-		return nil, fmt.Errorf("failed to set msg size: %w", err)
+	if err := c.connect(); err != nil {
+		return nil, err
 	}
 
 	return c, nil
+}
+
+func (c *TCPClient) connect() error {
+	if err := c.dialAndAuthenticate(); err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+
+	if err := c.getAndSetMsgSize(ctx); err != nil {
+		_ = c.connection.Close()
+
+		return fmt.Errorf("failed to set msg size: %w", err)
+	}
+
+	return nil
+}
+
+func (c *TCPClient) dialAndAuthenticate() error {
+	connection, err := dial(c.address, c.tlsConfig)
+	if err != nil {
+		return err
+	}
+
+	c.connection = connection
+
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+
+	if err := c.authenticate(ctx); err != nil {
+		_ = connection.Close()
+
+		return err
+	}
+
+	return nil
+}
+
+func (c *TCPClient) authenticate(ctx context.Context) error {
+	if c.token == "" {
+		return nil
+	}
+
+	request := make([]byte, 0, len(CommandAuth)+1+len(c.token))
+	request = append(request, CommandAuth...)
+	request = append(request, ' ')
+	request = append(request, c.token...)
+
+	resp, err := c.Send(ctx, request)
+	if err != nil {
+		return fmt.Errorf("send auth: %w", err)
+	}
+
+	result, err := parseResponse(resp)
+	if err != nil {
+		return fmt.Errorf("parse auth response: %w", err)
+	}
+
+	if result.status == ResponseStatusError {
+		return fmt.Errorf("%w: %w", ErrAuthFailed, result.err)
+	}
+
+	return nil
+}
+
+func dial(address string, tlsConfig *tls.Config) (net.Conn, error) {
+	if tlsConfig == nil {
+		connection, err := net.Dial("tcp", address)
+		if err != nil {
+			return nil, fmt.Errorf("failed to dial: %w", err)
+		}
+
+		return connection, nil
+	}
+
+	connection, err := tls.Dial("tcp", address, tlsConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial tls: %w", err)
+	}
+
+	return connection, nil
 }
 
 func (c *TCPClient) Send(ctx context.Context, request []byte) ([]byte, error) {
@@ -211,14 +300,7 @@ func (c *TCPClient) SetMaxMessageSizeUnsafe(size int) {
 func (c *TCPClient) Reconnect() error {
 	_ = c.connection.Close()
 
-	connection, err := net.Dial("tcp", c.address)
-	if err != nil {
-		return err
-	}
-
-	c.connection = connection
-
-	return nil
+	return c.dialAndAuthenticate()
 }
 
 func (c *TCPClient) deadline(ctx context.Context) time.Time {

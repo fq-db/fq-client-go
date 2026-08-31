@@ -27,6 +27,7 @@ const (
 	CommandTruncate   = "TRUNCATE"
 	CommandMsgSize    = "MSGSIZE"
 	CommandInspect    = "INSPECT"
+	CommandAuth       = "AUTH"
 	RLimitAlgorithmFW = "FW"
 	RLimitAlgorithmSW = "SW"
 	RLimitAlgorithmTB = "TB"
@@ -105,9 +106,9 @@ type Client struct {
 	pool *ConnectionPool
 }
 
-func New(address string, idleTimeout time.Duration, poolSize int) (*Client, error) {
+func New(address string, idleTimeout time.Duration, poolSize int, opts ...Option) (*Client, error) {
 	newConnFn := func() (*TCPClient, error) {
-		return NewTCPClient(address, 4096, idleTimeout)
+		return NewTCPClient(address, 4096, idleTimeout, opts...)
 	}
 
 	pool := NewConnectionPool(poolSize, newConnFn)

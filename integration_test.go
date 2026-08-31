@@ -17,7 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const defaultFQServerRepo = "https://github.com/rom8726/fq.git"
+const defaultFQServerRepo = "https://github.com/fq-db/fq.git"
 
 func TestClientAgainstRealFQServer(t *testing.T) {
 	requireCommand(t, "git")
@@ -443,6 +443,13 @@ func (p *fqServerProcess) Stop(t *testing.T) {
 func cloneFQServer(t *testing.T, workDir string) string {
 	t.Helper()
 
+	if localDir := os.Getenv("FQ_SERVER_DIR"); localDir != "" {
+		absolute, err := filepath.Abs(localDir)
+		require.NoError(t, err)
+
+		return absolute
+	}
+
 	repoURL := getenvDefault("FQ_SERVER_REPO", defaultFQServerRepo)
 	repoRef := os.Getenv("FQ_SERVER_REF")
 	repoDir := filepath.Join(workDir, "fq")
@@ -510,9 +517,11 @@ replication:
   replica_type: master
   master_address: "%s"
   sync_interval: 1s
+  auth:
+    token_file: "%s"
 logging:
   level: error
-`, serverAddress, walDir, dumpDir, replicationAddress)
+`, serverAddress, walDir, dumpDir, replicationAddress, writeSecretFile(t, workDir, "replication.token", replicationSecret))
 
 	require.NoError(t, os.WriteFile(configPath, []byte(config), 0o600))
 
