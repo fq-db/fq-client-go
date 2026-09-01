@@ -28,20 +28,11 @@ func serveAuthenticatedConnections(t *testing.T, token string, connections int) 
 				return
 			}
 
-			if err := requireRequestAndRespond(connection, CommandAuth+" "+token, "ok|1"); err != nil {
+			if err := requireHelloAuth(connection, token, 4096); err != nil {
 				_ = connection.Close()
 				done <- err
 
 				return
-			}
-
-			if i == 0 {
-				if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|4096"); err != nil {
-					_ = connection.Close()
-					done <- err
-
-					return
-				}
 			}
 
 			if err := requireRequestAndRespond(connection, "GET k 60", "ok|7"); err != nil {
@@ -111,7 +102,7 @@ func TestAuthenticationIsSkippedWithoutToken(t *testing.T) {
 		}
 		defer func() { _ = connection.Close() }()
 
-		done <- requireRequestAndRespond(connection, CommandMsgSize, "ok|4096")
+		done <- requireHello(connection, 4096, false)
 	}()
 
 	client, err := NewTCPClient(listener.Addr().String(), 4096, time.Minute)
@@ -133,7 +124,11 @@ func TestRejectedAuthenticationFailsConstruction(t *testing.T) {
 		}
 		defer func() { _ = connection.Close() }()
 
-		_ = requireRequestAndRespond(connection, CommandAuth+" wrong-token", "err|authentication failed")
+		_ = requireRequestAndRespond(
+			connection,
+			CommandHello+" 1 AUTH wrong-token",
+			"err|3002|authentication failed",
+		)
 	}()
 
 	_, err = NewTCPClient(listener.Addr().String(), 4096, time.Minute, WithToken("wrong-token"))

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strconv"
 	"time"
 )
 
@@ -60,23 +61,6 @@ func NewTCPClient(
 }
 
 func (c *TCPClient) connect() error {
-	if err := c.dialAndAuthenticate(); err != nil {
-		return err
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-	defer cancel()
-
-	if err := c.getAndSetMsgSize(ctx); err != nil {
-		_ = c.connection.Close()
-
-		return fmt.Errorf("failed to set msg size: %w", err)
-	}
-
-	return nil
-}
-
-func (c *TCPClient) dialAndAuthenticate() error {
 	connection, err := dial(c.address, c.tlsConfig)
 	if err != nil {
 		return err
@@ -87,7 +71,7 @@ func (c *TCPClient) dialAndAuthenticate() error {
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 	defer cancel()
 
-	if err := c.authenticate(ctx); err != nil {
+	if err := c.hello(ctx); err != nil {
 		_ = connection.Close()
 
 		return err
@@ -96,29 +80,40 @@ func (c *TCPClient) dialAndAuthenticate() error {
 	return nil
 }
 
-func (c *TCPClient) authenticate(ctx context.Context) error {
-	if c.token == "" {
-		return nil
-	}
-
-	request := make([]byte, 0, len(CommandAuth)+1+len(c.token))
-	request = append(request, CommandAuth...)
+func (c *TCPClient) hello(ctx context.Context) error {
+	version := strconv.FormatUint(ProtocolVersion, 10)
+	request := make([]byte, 0, len(CommandHello)+1+len(version)+len(" AUTH ")+len(c.token))
+	request = append(request, CommandHello...)
 	request = append(request, ' ')
-	request = append(request, c.token...)
+	request = append(request, version...)
+	if c.token != "" {
+		request = append(request, " AUTH "...)
+		request = append(request, c.token...)
+	}
 
 	resp, err := c.Send(ctx, request)
 	if err != nil {
-		return fmt.Errorf("send auth: %w", err)
+		return fmt.Errorf("send hello: %w", err)
 	}
 
-	result, err := parseResponse(resp)
+	info, err := parseHelloResponse(resp)
 	if err != nil {
-		return fmt.Errorf("parse auth response: %w", err)
+		return fmt.Errorf("parse hello response: %w", err)
 	}
 
-	if result.status == ResponseStatusError {
-		return fmt.Errorf("%w: %w", ErrAuthFailed, result.err)
+	if info.status == ResponseStatusError {
+		if isProtocolCode(info.err, CodeAuthenticationFailed) {
+			return fmt.Errorf("%w: %w", ErrAuthFailed, info.err)
+		}
+
+		return info.err
 	}
+
+	if info.version != ProtocolVersion {
+		return fmt.Errorf("%w: negotiated version %d", ErrCorruptedResponse, info.version)
+	}
+
+	c.SetMaxMessageSizeUnsafe(info.maxMessageSize)
 
 	return nil
 }
@@ -300,7 +295,7 @@ func (c *TCPClient) SetMaxMessageSizeUnsafe(size int) {
 func (c *TCPClient) Reconnect() error {
 	_ = c.connection.Close()
 
-	return c.dialAndAuthenticate()
+	return c.connect()
 }
 
 func (c *TCPClient) deadline(ctx context.Context) time.Time {
@@ -315,38 +310,6 @@ func (c *TCPClient) deadline(ctx context.Context) time.Time {
 	}
 
 	return deadline
-}
-
-func (c *TCPClient) getAndSetMsgSize(ctx context.Context) error {
-	sz, err := msgSize(ctx, c)
-	if err != nil {
-		return err
-	}
-
-	c.SetMaxMessageSizeUnsafe(sz)
-
-	return nil
-}
-
-func msgSize(ctx context.Context, client *TCPClient) (int, error) {
-	resp, err := client.Send(ctx, []byte(CommandMsgSize))
-	if err != nil {
-		return 0, fmt.Errorf("send: %w", err)
-	}
-
-	result, err := parseResponse(resp)
-	if err != nil {
-		return 0, fmt.Errorf("parse response: %w", err)
-	}
-
-	switch result.status {
-	case ResponseStatusSuccess:
-		return int(result.value), nil
-	case ResponseStatusError:
-		return 0, result.err
-	default:
-		return 0, ErrUnknownRespStatus
-	}
 }
 
 func readFrameInto(conn net.Conn, maxMessageSize int, buffer []byte) ([]byte, error) {

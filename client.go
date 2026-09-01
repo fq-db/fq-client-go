@@ -25,7 +25,7 @@ const (
 	CommandPScan      = "PSCAN"
 	CommandFlushDB    = "FLUSHDB"
 	CommandTruncate   = "TRUNCATE"
-	CommandMsgSize    = "MSGSIZE"
+	CommandHello      = "HELLO"
 	CommandInspect    = "INSPECT"
 	CommandAuth       = "AUTH"
 	RLimitAlgorithmFW = "FW"
@@ -33,7 +33,10 @@ const (
 	RLimitAlgorithmTB = "TB"
 )
 
-const ScanCursorInitial = "0"
+const (
+	ProtocolVersion   = 1
+	ScanCursorInitial = "0"
+)
 
 const maxReconnectAttempts = 16
 

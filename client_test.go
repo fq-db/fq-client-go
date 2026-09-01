@@ -15,7 +15,7 @@ func TestClientRateLimitCommands(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -71,7 +71,7 @@ func TestClientQuotaCommands(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -139,7 +139,7 @@ func TestClientQuotaAcquireCommandWithoutTTL(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -167,7 +167,7 @@ func TestClientQuotaAcquireLeaseCommand(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -196,7 +196,7 @@ func TestClientQuotaSetNAndAcquireNCommands(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -246,7 +246,7 @@ func TestClientScanCommands(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -288,7 +288,7 @@ func TestClientDatabaseMaintenanceCommands(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -319,7 +319,7 @@ func TestClientPStreamCommand(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -360,7 +360,7 @@ func TestClientQPStreamCommand(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -403,7 +403,7 @@ func TestClientStreamCommand(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -444,7 +444,7 @@ func TestClientQStreamCommand(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -499,7 +499,7 @@ func TestClientPStreamReconnectsAfterIdleConnectionClosed(t *testing.T) {
 			done <- err
 			return
 		}
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			_ = connection.Close()
 			done <- err
 			return
@@ -525,6 +525,11 @@ func TestClientPStreamReconnectsAfterIdleConnectionClosed(t *testing.T) {
 		defer func() {
 			_ = connection.Close()
 		}()
+
+		if err := requireHello(connection, 2048, false); err != nil {
+			done <- err
+			return
+		}
 
 		request, err = readFrame(connection, 2048)
 		if err != nil {
@@ -577,7 +582,7 @@ func TestClientReconnectsAfterIdleConnectionClosed(t *testing.T) {
 			done <- err
 			return
 		}
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			_ = connection.Close()
 			done <- err
 			return
@@ -593,6 +598,11 @@ func TestClientReconnectsAfterIdleConnectionClosed(t *testing.T) {
 		defer func() {
 			_ = connection.Close()
 		}()
+
+		if err := requireHello(connection, 2048, false); err != nil {
+			done <- err
+			return
+		}
 
 		done <- requireRequestAndRespond(connection, "GET idle-key 60", "ok|7")
 	}()

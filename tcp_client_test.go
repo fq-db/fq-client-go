@@ -17,7 +17,7 @@ func TestTCPClient(t *testing.T) {
 	response := "hello client"
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -45,7 +45,7 @@ func TestTCPIdleClientConnection(t *testing.T) {
 	defer cancel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -92,7 +92,7 @@ func TestSendWithReconnectRetriesAfterUnexpectedEOF(t *testing.T) {
 			return
 		}
 
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			_ = connection.Close()
 			done <- err
 			return
@@ -106,6 +106,12 @@ func TestSendWithReconnectRetriesAfterUnexpectedEOF(t *testing.T) {
 		for i := 0; i < maxReconnectAttempts-1; i++ {
 			connection, err = listener.Accept()
 			if err != nil {
+				done <- err
+				return
+			}
+
+			if err := requireHello(connection, 2048, false); err != nil {
+				_ = connection.Close()
 				done <- err
 				return
 			}
@@ -124,6 +130,11 @@ func TestSendWithReconnectRetriesAfterUnexpectedEOF(t *testing.T) {
 		defer func() {
 			_ = connection.Close()
 		}()
+
+		if err := requireHello(connection, 2048, false); err != nil {
+			done <- err
+			return
+		}
 
 		done <- requireRequestAndRespond(connection, request, response)
 	}()
@@ -197,6 +208,27 @@ func requireRequestAndRespond(connection net.Conn, expectedRequest, response str
 	}
 
 	return writeFrame(connection, []byte(response))
+}
+
+func requireHello(connection net.Conn, maxMessageSize int, authRequired bool) error {
+	authFlag := 0
+	if authRequired {
+		authFlag = 1
+	}
+
+	return requireRequestAndRespond(
+		connection,
+		fmt.Sprintf("%s %d", CommandHello, ProtocolVersion),
+		fmt.Sprintf("ok|%d;%d;%d;admin", ProtocolVersion, maxMessageSize, authFlag),
+	)
+}
+
+func requireHelloAuth(connection net.Conn, token string, maxMessageSize int) error {
+	return requireRequestAndRespond(
+		connection,
+		fmt.Sprintf("%s %d AUTH %s", CommandHello, ProtocolVersion, token),
+		fmt.Sprintf("ok|%d;%d;1;admin", ProtocolVersion, maxMessageSize),
+	)
 }
 
 func readFrame(connection net.Conn, maxMessageSize int) ([]byte, error) {

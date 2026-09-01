@@ -53,12 +53,12 @@ func Test_parseMultiResponse(t *testing.T) {
 		{
 			name: "error response",
 			args: args{
-				data: []byte("err|some error"),
+				data: []byte("err|1001|invalid command"),
 			},
 			want: multiResponseStruct{
 				status: ResponseStatusError,
 				values: nil,
-				err:    errors.New("some error"),
+				err:    &ProtocolError{Code: CodeInvalidCommand, Message: "invalid command"},
 			},
 		},
 	}
@@ -110,10 +110,10 @@ func Test_parseRateLimitResponse(t *testing.T) {
 		},
 		{
 			name: "error response",
-			data: []byte("err|invalid rate limit algorithm"),
+			data: []byte("err|2006|invalid rate limit algorithm"),
 			want: rateLimitResponseStruct{
 				status: ResponseStatusError,
-				err:    errors.New("invalid rate limit algorithm"),
+				err:    &ProtocolError{Code: CodeInvalidRateLimitAlgorithm, Message: "invalid rate limit algorithm"},
 			},
 		},
 		{
@@ -177,10 +177,10 @@ func Test_parseQuotaAcquireResponse(t *testing.T) {
 		},
 		{
 			name: "error response",
-			data: []byte("err|quota limit mismatch"),
+			data: []byte("err|4001|quota limit mismatch"),
 			want: quotaAcquireResponseStruct{
 				status: ResponseStatusError,
-				err:    errors.New("quota limit mismatch"),
+				err:    &ProtocolError{Code: CodeQuotaLimitMismatch, Message: "quota limit mismatch"},
 			},
 		},
 		{
@@ -245,10 +245,10 @@ func Test_parseQuotaInfoResponse(t *testing.T) {
 		},
 		{
 			name: "error response",
-			data: []byte("err|bad quota name"),
+			data: []byte("err|1002|invalid arguments"),
 			want: quotaInfoResponseStruct{
 				status: ResponseStatusError,
-				err:    errors.New("bad quota name"),
+				err:    &ProtocolError{Code: CodeInvalidArguments, Message: "invalid arguments"},
 			},
 		},
 		{
@@ -310,10 +310,10 @@ func Test_parseScanResponse(t *testing.T) {
 		},
 		{
 			name: "error response",
-			data: []byte("err|scan index is disabled"),
+			data: []byte("err|5000|scan index is disabled"),
 			want: scanResponseStruct{
 				status: ResponseStatusError,
-				err:    errors.New("scan index is disabled"),
+				err:    &ProtocolError{Code: CodeScanIndexDisabled, Message: "scan index is disabled"},
 			},
 		},
 		{
@@ -368,10 +368,10 @@ func Test_parseLimitEventResponse(t *testing.T) {
 		},
 		{
 			name: "error response",
-			data: []byte("err|invalid stream prefix"),
+			data: []byte("err|1002|invalid arguments"),
 			want: limitEventResponseStruct{
 				status: ResponseStatusError,
-				err:    errors.New("invalid stream prefix"),
+				err:    &ProtocolError{Code: CodeInvalidArguments, Message: "invalid arguments"},
 			},
 		},
 		{
@@ -435,10 +435,10 @@ func Test_parseQuotaEventResponse(t *testing.T) {
 		},
 		{
 			name: "error response",
-			data: []byte("err|invalid stream prefix"),
+			data: []byte("err|1002|invalid arguments"),
 			want: quotaEventResponseStruct{
 				status: ResponseStatusError,
-				err:    errors.New("invalid stream prefix"),
+				err:    &ProtocolError{Code: CodeInvalidArguments, Message: "invalid arguments"},
 			},
 		},
 		{
@@ -464,4 +464,16 @@ func Test_parseQuotaEventResponse(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestProtocolErrorCanBeMatchedByCode(t *testing.T) {
+	result, err := parseResponse([]byte("err|3001|permission denied"))
+	require.NoError(t, err)
+	require.Equal(t, ResponseStatusError, result.status)
+
+	var protocolErr *ProtocolError
+	require.True(t, errors.As(result.err, &protocolErr))
+	require.Equal(t, CodePermissionDenied, protocolErr.Code)
+	require.Equal(t, "permission denied", protocolErr.Message)
+	require.EqualError(t, result.err, "3001: permission denied")
 }

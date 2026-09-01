@@ -24,9 +24,9 @@ client, err := fq.New("127.0.0.1:1945", time.Second, 8,
 )
 ```
 
-The token is sent as an `AUTH` command right after the connection is established and again
-after every reconnect, so pooled connections stay authenticated. A rejected token fails
-construction with an error matching `fq.ErrAuthFailed`:
+The token is sent inline with the required `HELLO` handshake after the connection is
+established and again after every reconnect, so pooled connections stay authenticated.
+A rejected token fails construction with an error matching `fq.ErrAuthFailed`:
 
 ```go
 if errors.Is(err, fq.ErrAuthFailed) {
@@ -34,7 +34,15 @@ if errors.Is(err, fq.ErrAuthFailed) {
 }
 ```
 
-Commands the token's role does not cover return an error containing `permission denied`.
+Commands the token's role does not cover return a `*fq.ProtocolError` with code
+`fq.CodePermissionDenied`:
+
+```go
+var protocolErr *fq.ProtocolError
+if errors.As(err, &protocolErr) && protocolErr.Code == fq.CodePermissionDenied {
+    // authenticated, but not allowed to run this command
+}
+```
 
 ## TLS
 

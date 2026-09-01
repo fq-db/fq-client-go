@@ -252,7 +252,7 @@ func parseInspectResponse(resp []byte) (inspectResponseStruct, error) {
 
 		return inspectResponseStruct{status: ResponseStatusSuccess, report: report}, nil
 	case frameStatusError:
-		return inspectResponseStruct{status: ResponseStatusError, err: errors.New(string(data))}, nil
+		return inspectResponseStruct{status: ResponseStatusError, err: parseError(data)}, nil
 	default:
 		return inspectResponseStruct{}, ErrUnknownRespStatus
 	}

@@ -17,7 +17,7 @@ func TestClientInspectCommand(t *testing.T) {
 	syncCommit := "off"
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -66,7 +66,7 @@ func TestClientInspectCommandWithSection(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
@@ -98,11 +98,11 @@ func TestClientInspectCommandError(t *testing.T) {
 	t.Parallel()
 
 	address, done := serveFramedClient(t, func(connection net.Conn) error {
-		if err := requireRequestAndRespond(connection, CommandMsgSize, "ok|2048"); err != nil {
+		if err := requireHello(connection, 2048, false); err != nil {
 			return err
 		}
 
-		return requireRequestAndRespond(connection, "INSPECT BOGUS", `err|unknown inspect section: "BOGUS"`)
+		return requireRequestAndRespond(connection, "INSPECT BOGUS", `err|1002|unknown inspect section: "BOGUS"`)
 	})
 
 	client, err := New(address, time.Minute, 1)
@@ -113,5 +113,8 @@ func TestClientInspectCommandError(t *testing.T) {
 	}()
 
 	_, err = client.Inspect(context.Background(), "BOGUS")
-	require.EqualError(t, err, `unknown inspect section: "BOGUS"`)
+	var protocolErr *ProtocolError
+	require.ErrorAs(t, err, &protocolErr)
+	require.Equal(t, CodeInvalidArguments, protocolErr.Code)
+	require.Equal(t, `unknown inspect section: "BOGUS"`, protocolErr.Message)
 }

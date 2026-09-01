@@ -284,8 +284,7 @@ func TestClientAgainstSecuredFQServer(t *testing.T) {
 		require.Equal(t, uint64(1), value)
 
 		_, err = client.FlushDB(ctx)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "permission denied")
+		requireProtocolErrorCode(t, err, CodePermissionDenied)
 	})
 
 	t.Run("read only token cannot write", func(t *testing.T) {
@@ -301,8 +300,7 @@ func TestClientAgainstSecuredFQServer(t *testing.T) {
 		require.NoError(t, err)
 
 		_, err = client.Incr(ctx, key)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "permission denied")
+		requireProtocolErrorCode(t, err, CodePermissionDenied)
 	})
 
 	t.Run("wrong token is rejected", func(t *testing.T) {
@@ -321,8 +319,7 @@ func TestClientAgainstSecuredFQServer(t *testing.T) {
 			_, err = client.Incr(ctx, CappingKey{Key: "anon", Capping: 60})
 		}
 
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "not authenticated")
+		requireProtocolErrorCode(t, err, CodeNotAuthenticated)
 	})
 
 	t.Run("client certificate is required", func(t *testing.T) {
@@ -357,4 +354,12 @@ func TestClientAgainstSecuredFQServer(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, uint64(2), value)
 	})
+}
+
+func requireProtocolErrorCode(t *testing.T, err error, code ErrorCode) {
+	t.Helper()
+
+	var protocolErr *ProtocolError
+	require.ErrorAs(t, err, &protocolErr)
+	require.Equal(t, code, protocolErr.Code)
 }
