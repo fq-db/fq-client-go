@@ -67,6 +67,29 @@ func TestClientRateLimitCommands(t *testing.T) {
 	}, tb)
 }
 
+func TestClientWatchCommand(t *testing.T) {
+	t.Parallel()
+
+	address, done := serveFramedClient(t, func(connection net.Conn) error {
+		if err := requireHello(connection, 2048, false); err != nil {
+			return err
+		}
+
+		return requireRequestAndRespond(connection, "WATCH user_42 60", "ok|7")
+	})
+
+	client, err := New(address, time.Minute, 1)
+	require.NoError(t, err)
+	defer func() {
+		client.Close()
+		require.NoError(t, <-done)
+	}()
+
+	value, err := client.Watch(context.Background(), CappingKey{Key: "user_42", Capping: 60})
+	require.NoError(t, err)
+	require.Equal(t, uint64(7), value)
+}
+
 func TestClientQuotaCommands(t *testing.T) {
 	t.Parallel()
 

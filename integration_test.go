@@ -225,6 +225,36 @@ func TestClientAgainstRealFQServer(t *testing.T) {
 		require.ErrorIs(t, <-streamErrs, io.EOF)
 	})
 
+	t.Run("watch", func(t *testing.T) {
+		key := CappingKey{Key: "integration-watch", Capping: 60}
+		watchValues := make(chan uint64, 1)
+		watchErrs := make(chan error, 1)
+
+		go func() {
+			value, err := client.Watch(ctx, key)
+			if err != nil {
+				watchErrs <- err
+				return
+			}
+
+			watchValues <- value
+		}()
+
+		time.Sleep(150 * time.Millisecond)
+		value, err := client.Incr(ctx, key)
+		require.NoError(t, err)
+		require.Equal(t, uint64(1), value)
+
+		select {
+		case err := <-watchErrs:
+			require.NoError(t, err)
+		case value := <-watchValues:
+			require.Equal(t, uint64(1), value)
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for watch")
+		}
+	})
+
 	t.Run("quota", func(t *testing.T) {
 		changed, err := client.QuotaSet(ctx, "integration-quota", 10)
 		require.NoError(t, err)

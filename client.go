@@ -15,6 +15,7 @@ const (
 	CommandGet        = "GET"
 	CommandDel        = "DEL"
 	CommandMDel       = "MDEL"
+	CommandWatch      = "WATCH"
 	CommandRLimit     = "RLIMIT"
 	CommandStream     = "STREAM"
 	CommandPStream    = "PSTREAM"
@@ -175,6 +176,39 @@ func (c *Client) Get(ctx context.Context, key CappingKey) (uint64, error) {
 	defer bytesBufferPool.Put(buf)
 
 	writeCommand(buf, CommandGet, key)
+
+	conn, err := c.pool.GetConnection()
+	if err != nil {
+		return 0, fmt.Errorf("get connection: %w", err)
+	}
+
+	defer c.pool.ReleaseConnection(conn)
+
+	resp, err := sendWithReconnect(ctx, conn, buf.Bytes())
+	if err != nil {
+		return 0, fmt.Errorf("send: %w", err)
+	}
+
+	result, err := parseResponse(resp)
+	if err != nil {
+		return 0, fmt.Errorf("parse response: %w", err)
+	}
+
+	switch result.status {
+	case ResponseStatusSuccess:
+		return result.value, nil
+	case ResponseStatusError:
+		return 0, result.err
+	default:
+		return 0, ErrUnknownRespStatus
+	}
+}
+
+func (c *Client) Watch(ctx context.Context, key CappingKey) (uint64, error) {
+	buf := bytesBufferPool.Get()
+	defer bytesBufferPool.Put(buf)
+
+	writeCommand(buf, CommandWatch, key)
 
 	conn, err := c.pool.GetConnection()
 	if err != nil {
