@@ -13,6 +13,36 @@ defer client.Close()
 value, err := client.Incr(ctx, fq.CappingKey{Key: "user_42", Capping: 60})
 ```
 
+## Sharding
+
+Use `fq.NewSharded` when one logical database is split across several fq instances.
+The connection settings are shared by all shards, and the caller provides the shard
+selection function.
+
+```go
+client, err := fq.NewSharded(
+    []string{"fq-a.internal:1945", "fq-b.internal:1945"},
+    time.Second,
+    8,
+    func(key string, shardCount int) int {
+        h := fnv.New32a()
+        _, _ = h.Write([]byte(key))
+
+        return int(h.Sum32() % uint32(shardCount))
+    },
+    fq.WithToken(os.Getenv("FQ_TOKEN")),
+)
+if err != nil {
+    return err
+}
+defer client.Close()
+```
+
+Counter and rate-limit commands are routed by key; quota commands are routed by
+quota name. `MDel` is split across shards and returns results in the input order.
+`FlushDB`, `Truncate`, `Inspect`, and streams fan out to every shard. `Scan` and
+`PScan` walk shards with an opaque cursor returned by the client.
+
 ## Authentication
 
 When the server has `network.auth` configured, pass the token with `fq.WithToken`. The
